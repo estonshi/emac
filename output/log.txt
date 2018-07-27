@@ -1,0 +1,17 @@
+[Initiate]
+Number of rotations   :   14553
+Number of patterns    :   25
+Mean photon count     :   31786.398438
+Need Scaling          :   yes
+Merged volume size    :   103 x 103 x 103
+Initial model         :   random
+
+[Iterations]
+iter_num   used_time    rms_change   pat_rot      num_rot      beta      
+1          300.00       3.300        1.450        14553        1.000     
+2          300.00       3.300        1.450        14553        1.000     
+3          300.00       3.300        1.450        14553        1.414     
+(Resuming)
+4          300.00       3.300        1.450        14553        1.414     
+5          300.00       3.300        1.450        14553        1.999     
+6          300.00       3.300        1.450        14553        1.999     
