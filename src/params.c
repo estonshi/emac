@@ -240,7 +240,7 @@ bool setup(char* config_file, bool resume){
 	gen_quaternions(quat_lev, 0, __quat);
 
 	// load detector pixels' qinfo, func from params.h
-	__mask = (int*) malloc(__det_x * __det_y * sizeof(bool));
+	__mask = (int*) malloc(__det_x * __det_y * sizeof(int));
 	__det = (float*) malloc(__det_x * __det_y * 3 * sizeof(float));
 	if( !load_det_info(__det_path, __mask, __det) ) 
 		return false;
