@@ -382,11 +382,12 @@ void free_all(){
 	// free mask
 	free(__mask);
 	// free dataset
-	emac_pat *thisp = __dataset;
+	emac_pat *thisp = __dataset->next;
 	while(thisp != NULL){
 		free(thisp);
 		thisp = thisp->next;
 	}
+	free(__dataset);
 }
 
 

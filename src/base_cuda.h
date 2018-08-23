@@ -10,9 +10,9 @@
 // global device variable
 int *__mask_gpu;
 float *__det_gpu;
-cudaArray *__w_gpu;
+float *__w_gpu;
 cudaArray *__model_1_gpu;
-cudaArray *__model_2_gpu;
+float *__model_2_gpu;
 
 // texture
 texture<float> __tex_01;
@@ -66,10 +66,16 @@ inline void gpuInitAssert(const char *file, int line)
 	if( !__initiated )
 	{
 		printf("GPU-Init-assert : %s %s %d\n", "GPU variables are not initiated.", file, line);
-		exit(code);
+		exit(1);
 	}
 }
 
+/*
+// debug
+size_t free_byte, total_byte;
+cudaErrchk(cudaMemGetInfo(&free_byte, &total_byte));
+printf("free mem : %f MB, total mem : %f MB\n", (float)free_byte/1024/1024, (float)total_byte/1024/1024);
+*/
 
 
 #endif

@@ -9,6 +9,8 @@ extern "C" void setDevice(int gpu_id);
 extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w);
 
+extern "C" void download_model2_from_gpu(float *model_2, int vol_size);
+
 extern "C" void free_cuda_all();
 
 extern "C" void cuda_start_event();
@@ -17,7 +19,9 @@ extern "C" float cuda_return_time();
 
 extern "C" void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
 
+extern "C" void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
 
+extern "C" void merge_scaling(int GridSize, int BlockSize);
 
 
 /*********************************************/
@@ -74,19 +78,11 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 	cudaMemcpy3D(&volParms);
 	cudaBindTextureToArray(__tex_model, __model_1_gpu);
 	// model_2
-	cudaMalloc3DArray(&__model_2_gpu, &volDesc, volExt);
-	volParms.srcPtr = make_cudaPitchedPtr((void*)init_model_2, sizeof(float)*vol_size, (int)vol_size, (int)vol_size);
-	volParms.dstArray = __model_2_gpu;
-	volParms.extent = volExt;
-	volParms.kind = cudaMemcpyHostToDevice;
-	cudaMemcpy3D(&volParms);
+	cudaMalloc((void**)&__model_2_gpu, vol_size*vol_size*vol_size*sizeof(float));
+	cudaMemcpy(__model_2_gpu, init_model_2, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice);
 	// merge_w
-	cudaMalloc3DArray(&__w_gpu, &volDesc, volExt);
-	volParms.srcPtr = make_cudaPitchedPtr((void*)init_merge_w, sizeof(float)*vol_size, (int)vol_size, (int)vol_size);
-	volParms.dstArray = __w_gpu;
-	volParms.extent = volExt;
-	volParms.kind = cudaMemcpyHostToDevice;
-	cudaMemcpy3D(&volParms);
+	cudaMalloc((void**)&__w_gpu, vol_size*vol_size*vol_size*sizeof(float));
+	cudaMemcpy(__w_gpu, init_merge_w, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice);
 
 
 	// check error
@@ -94,6 +90,14 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 
 	// change init flag
 	__initiated = 1;
+}
+
+
+
+void download_model2_from_gpu(float *new_model_2, int vol_size)
+{
+	cudaMemcpy(new_model_2, __model_2_gpu, 
+		vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyDeviceToHost);
 }
 
 
@@ -116,10 +120,14 @@ void free_cuda_all()
 	cudaFreeArray(__model_1_gpu);
 
 	// free model_2
-	cudaFreeArray(__model_2_gpu);
+	cudaFree(__model_2_gpu);
 
 	// free merge_w
-	cudaFreeArray(__w_gpu);
+	cudaFree(__w_gpu);
+
+	// destroy cuda event
+	cudaEventDestroy(__custart);
+	cudaEventDestroy(__custop);
 
 	// reset
 	cudaDeviceReset();
@@ -336,17 +344,20 @@ void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int 
 	slicing<<<blocks, threads>>>(__det_gpu, myslice_device, __mask_gpu, MASKPIX);
 
 	// copy back
-	cudaMemcpy(myslice, myslice_device, det_x*det_y*sizeof(float), cudaMemcpyDeviceToHost);
+	cudaErrchk(cudaMemcpy(myslice, myslice_device, det_x*det_y*sizeof(float), cudaMemcpyDeviceToHost));
 
 	// cudafree
-	cudaFree(myslice_device);
+	cudaErrchk(cudaFree(myslice_device));
 
 }
 
 
 
-
-__global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *new_model, cudaArray *merge_w)
+// anyone who is interested can also optimized it using shared memory
+// I didn't try that cuz its really complex to arrange such a large volume array
+// ...
+// ok ... cuz I'm lazy ...
+__global__ void merging(float *ori_det, float *myslice, int *mymask, float *new_model, float *merge_w)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -354,7 +365,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 
 	float q0, q1, q2, tmp, val;
 	float d[3];
-	int lx, ly, lz, center;
+	long int lx, ly, lz;
+	int center;
 
 	if(offset >= __pats_gpu[0]*__pats_gpu[1]) return;
 	x = mymask[offset];
@@ -374,9 +386,9 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 	d[0] = d[0] + center;
 	d[1] = d[1] + center;
 	d[2] = d[2] + center;
-	lx = (int) floor(d[0]);
-	ly = (int) floor(d[1]);
-	lz = (int) floor(d[2]);
+	lx = (long int) floor(d[0]);
+	ly = (long int) floor(d[1]);
+	lz = (long int) floor(d[2]);
 
 	val = myslice[offset];
 
@@ -386,6 +398,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 	}
 
 	// interp
+	x = __vol_len_gpu[0] * __vol_len_gpu[0];
+	y = __vol_len_gpu[0];
 
 	//if(lx>=0 && ly>=0 && lz>=0){
 		q0 = d[0]-lx;
@@ -393,8 +407,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		q2 = d[2]-lz;
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx][ly][lz]), tmp);
-		atomicAdd(&(new_model[lx][ly][lz]), tmp*val);
+		atomicAdd(&merge_w[lx * x + ly * y + lz], tmp);
+		atomicAdd(&new_model[lx * x + ly * y + lz], tmp*val);
 	//}
 
 	//if(lx+1<__vol_len_gpu[0] && ly>=0 && lz>=0){
@@ -403,8 +417,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		//q2 = d[2]-lz;
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx+1][ly][lz]), tmp);
-		atomicAdd(&(new_model[lx+1][ly][lz]), tmp*val);
+		atomicAdd(&merge_w[(lx+1) * x + ly * y + lz], tmp);
+		atomicAdd(&new_model[(lx+1) * x + ly * y + lz], tmp*val);
 	//}
 
 	//if(lx+1<__vol_len_gpu[0] && ly+1<__vol_len_gpu[0] && lz>=0){
@@ -413,8 +427,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		//q2 = d[2]-lz;
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx+1][ly+1][lz]), tmp);
-		atomicAdd(&(new_model[lx+1][ly+1][lz]), tmp*val);
+		atomicAdd(&merge_w[(lx+1) * x + (ly+1) * y + lz], tmp);
+		atomicAdd(&new_model[(lx+1) * x + (ly+1) * y + lz], tmp*val);
 	//}
 
 	//if(lx+1<__vol_len_gpu[0] && ly+1<__vol_len_gpu[0] && lz+1<__vol_len_gpu[0]){
@@ -423,8 +437,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		q2 = lz+1-d[2];
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx+1][ly+1][lz+1]), tmp);
-		atomicAdd(&(new_model[lx+1][ly+1][lz+1]), tmp*val);
+		atomicAdd(&merge_w[(lx+1) * x + (ly+1) * y + (lz+1)], tmp);
+		atomicAdd(&new_model[(lx+1) * x + (ly+1) * y + (lz+1)], tmp*val);
 	//}
 
 	//if(lx+1<__vol_len_gpu[0] && ly>=0 && lz+1<__vol_len_gpu[0]){
@@ -433,8 +447,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		//q2 = lz+1-d[2];
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx+1][ly][lz+1]), tmp);
-		atomicAdd(&(new_model[lx+1][ly][lz+1]), tmp*val);
+		atomicAdd(&merge_w[(lx+1) * x + ly * y + (lz+1)], tmp);
+		atomicAdd(&new_model[(lx+1) * x + ly * y + (lz+1)], tmp*val);
 	//}
 
 	//if(lx>=0 && ly+1<__vol_len_gpu[0] && lz+1<__vol_len_gpu[0]){
@@ -443,8 +457,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		//q2 = lz+1-d[2];
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx][ly+1][lz+1]), tmp);
-		atomicAdd(&(new_model[lx][ly+1][lz+1]), tmp*val);
+		atomicAdd(&merge_w[lx * x + (ly+1) * y + (lz+1)], tmp);
+		atomicAdd(&new_model[lx * x + (ly+1) * y + (lz+1)], tmp*val);
 	//}
 
 	//if(lx>=0 && ly>=0 && lz+1<__vol_len_gpu[0]){
@@ -453,8 +467,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		//q2 = lz+1-d[2];
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx][ly][lz+1]), tmp);
-		atomicAdd(&(new_model[lx][ly][lz+1]), tmp*val);
+		atomicAdd(&merge_w[lx * x + ly * y + (lz+1)], tmp);
+		atomicAdd(&new_model[lx * x + ly * y + (lz+1)], tmp*val);
 	//}
 
 	//if(lx>=0 && ly+1<__vol_len_gpu[0] && lz>=0){
@@ -463,8 +477,8 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 		q2 = d[2]-lz;
 		tmp = sqrt( q0*q0 + q1*q1 + q2*q2 );
 		tmp = __expf(-tmp/0.3f);
-		atomicAdd(&(merge_w[lx][ly+1][lz]), tmp);
-		atomicAdd(&(new_model[lx][ly+1][lz]), tmp*val);
+		atomicAdd(&merge_w[lx * x + (ly+1) * y + lz], tmp);
+		atomicAdd(&new_model[lx * x + (ly+1) * y + lz], tmp*val);
 	//}
 
 	return;
@@ -472,20 +486,18 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, cudaArray *
 
 
 
-__global__ void merging_sc(cudaArray *new_model, cudaArray *merge_w)
+// this function really fucks up. 8 ms to finish on K80 !
+// but do we really need to optimize it ?
+// it ONLY runs one time at the end of each reconstruction iteration.
+__global__ void merging_sc(float *new_model, float *merge_w)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 	long int offset = x + y * blockDim.x * gridDim.x;
-	int z;
-	int tmp = __vol_len_gpu[0]*__vol_len_gpu[0];
 
 	while(offset < __vol_len_gpu[0]*__vol_len_gpu[0]*__vol_len_gpu[0]){
-		x = offset / tmp;
-		tmp = offset % tmp;
-		y = tmp / __vol_len_gpu[0];
-		z = tmp % __vol_len_gpu[1];
-		new_model[x][y][z] = new_model[x][y][z] / merge_w[x][y][z];
+		
+		new_model[offset] = new_model[offset] / merge_w[offset];
 
 		offset += blockDim.x * gridDim.x * blockDim.y * gridDim.y;
 	}
@@ -516,7 +528,7 @@ void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, in
 	merging<<<blocks, threads>>>(__det_gpu, myslice_device, __mask_gpu, __model_2_gpu, __w_gpu);
 
 	// cudafree
-	cudaFree(myslice_device);
+	cudaErrchk(cudaFree(myslice_device));
 
 }
 
