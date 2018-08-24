@@ -23,6 +23,8 @@ extern "C" void merge_slice(float *quaternion, float *myslice, int BlockSize, in
 
 extern "C" void merge_scaling(int GridSize, int BlockSize);
 
+extern "C" void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize);
+
 
 /*********************************************/
 
@@ -227,7 +229,8 @@ __global__ void slicing(float *ori_det, float *myslice, int *mymask, int MASKPIX
 	ly = (int) floor(d[1]);
 	lz = (int) floor(d[2]);
 
-	if(d[0]>=__vol_len_gpu[0] || d[1]>=__vol_len_gpu[0] || d[2]>=__vol_len_gpu[0] || d[0]<0 || d[1]<0 || d[2]<0){
+	// boundary control
+	if(lx+1>=__vol_len_gpu[0] || ly+1>=__vol_len_gpu[0] || lz+1>=__vol_len_gpu[0] || lx<0 || ly<0 || lz<0){
 		myslice[offset] = 0;
 		return;
 	}
@@ -393,7 +396,7 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, float *new_
 	val = myslice[offset];
 
 	// boundary control
-	if(d[0]>=__vol_len_gpu[0] || d[1]>=__vol_len_gpu[0] || d[2]>=__vol_len_gpu[0] || d[0]<0 || d[1]<0 || d[2]<0){
+	if(lx+1>=__vol_len_gpu[0] || ly+1>=__vol_len_gpu[0] || lz+1>=__vol_len_gpu[0] || lx<0 || ly<0 || lz<0){
 		return;
 	}
 
@@ -549,8 +552,134 @@ void merge_scaling(int GridSize, int BlockSize)
 }
 
 
+
+
 /*********************************************/
 
 /*            Angular Correlation            */
 
 /*********************************************/
+
+__global__ void polar_transfer(cufftReal* polar, int partition)
+{
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+
+	if(x >= partition || y >= partition) return;
+
+	float xx, yy, phi, r;
+	int lx, ly;
+	int patx = __pats_gpu[0];
+	int paty = __pats_gpu[1];
+
+	phi = (float)x / partition * PI * 2.0f;
+	lx = (__pats_gpu[0]>__pats_gpu[1] ? __pats_gpu[1]:__pats_gpu[0]);
+	r = (float)y / partition * (lx / 2.0f - __stoprad_gpu[0]) + __stoprad_gpu[0];
+
+	xx = r * __sinf(phi) + __center_gpu[0];  // for 2D matrix, get value with pattern[xx,yy]
+	yy = r * __cosf(phi) + __center_gpu[1];
+
+	float inten = 0;
+	float w = 0;
+
+	lx = (int)floor(xx);
+	ly = (int)floor(yy);
+	if(lx>=0 && ly>=0 && tex1Dfetch(__tex_mask, ly + lx*paty)<1){
+		r = xx-lx;
+		phi = yy-ly;
+		r = sqrt( r*r + phi*phi );
+		r = __expf(-r/0.3f);
+		w += r;
+		inten += r * tex1Dfetch(__tex_01, ly + lx*paty);
+	}
+	if(lx>=0 && ly+1<paty && tex1Dfetch(__tex_mask, ly + 1 + lx*paty)<1){
+		r = xx-lx;
+		phi = ly+1-yy;
+		r = sqrt( r*r + phi*phi );
+		r = __expf(-r/0.3f);
+		w += r;
+		inten += r * tex1Dfetch(__tex_01, ly + 1 + lx*paty);
+	}
+	if(lx+1<patx && ly>=0 && tex1Dfetch(__tex_mask, ly + (lx+1)*paty)<1){
+		r = lx+1-xx;
+		phi = yy-ly;
+		r = sqrt( r*r + phi*phi );
+		r = __expf(-r/0.3f);
+		w += r;
+		inten += r * tex1Dfetch(__tex_01, ly + (lx+1)*paty);
+	}
+	if(lx+1<patx && ly+1<paty && tex1Dfetch(__tex_mask, ly + 1 + (lx+1)*paty)<1){
+		r = lx+1-xx;
+		phi = ly+1-yy;
+		r = sqrt( r*r + phi*phi );
+		r = __expf(-r/0.3f);
+		w += r;
+		inten += r * tex1Dfetch(__tex_01, ly + 1 + (lx+1)*paty);
+	}
+
+	if(w<1e-6)
+		polar[offset] = 0;// / w;
+	else
+		polar[offset] = inten / w;
+}
+
+
+__global__ void cu_complex_l(cufftComplex* mycomplex, cufftReal* rets, int N)
+{
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if(i<N){
+		rets[i] = mycomplex[i].x * mycomplex[i].x + mycomplex[i].y * mycomplex[i].y;
+	}
+	return;
+}
+
+
+void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize){
+
+	gpuInitchk();
+
+	// locate device memory
+	cufftReal *pat_device;
+	cudaErrchk(cudaMalloc((void**)&pat_device, det_x*det_y*sizeof(cufftReal)));
+	cudaErrchk(cudaBindTexture(NULL, __tex_01, pat_device, det_x*det_y*sizeof(cufftReal)))
+
+	cufftReal *polar_device;
+	cudaErrchk(cudaMalloc((void**)&polar_device, partition*partition*sizeof(cufftReal)));
+
+	cufftComplex *re_device;
+	cudaErrchk(cudaMalloc((void**)&re_device, (partition/2+1)*partition*sizeof(cufftComplex)));
+
+	cufftReal *norm_device;
+	cudaErrchk(cudaMalloc((void**)&norm_device, (partition/2+1)*partition*sizeof(cufftReal)));
+
+	// memcpy
+	cudaErrchk(cudaMemcpy(pat_device, pat, det_x*det_y*sizeof(cufftReal), cudaMemcpyHostToDevice));
+
+	// polar grid
+	dim3 threads(BlockSize,BlockSize);
+	dim3 blocks((partition+BlockSize-1)/BlockSize, (partition+BlockSize-1)/BlockSize);
+	polar_transfer<<<blocks, threads>>>(polar_device, partition);
+
+	// init cufft handler
+	cufftHandle plan_many_signal;
+	cufftPlan1d(&plan_many_signal, partition, CUFFT_R2C, partition);
+
+	// run fft
+	cufftErrchk(cufftExecR2C(plan_many_signal, polar_device, re_device));
+
+	// self dot
+	cu_complex_l<<<partition,(partition/2+1)>>>(re_device, norm_device, (partition/2+1)*partition);
+
+	// memcpy
+	cudaErrchk(cudaMemcpy(result, norm_device, (partition/2+1)*partition*sizeof(cufftReal), cudaMemcpyDeviceToHost));
+
+	// destroy
+	cufftDestroy(plan_many_signal);
+	cudaUnbindTexture(__tex_01);
+	cudaFree(pat_device);
+	cudaFree(re_device);
+	cudaFree(norm_device);
+	cudaFree(polar_device);
+
+}

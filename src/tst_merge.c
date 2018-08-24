@@ -1,24 +1,5 @@
 #include "base.h"
-
-
-extern void setDevice(int gpu_id);
-
-extern void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
-	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w);
-
-extern void download_model2_from_gpu(float *model_2, int vol_size);
-
-extern void free_cuda_all();
-
-extern void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
-
-extern void cuda_start_event();
-
-extern float cuda_return_time();
-
-extern void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
-
-extern void merge_scaling(int GridSize, int BlockSize);
+#include "cuda_funcs.h"
  
 
 uint32 __qmax_len;
@@ -200,17 +181,16 @@ int main(int argc, char** argv){
 		// ...
 
 		// merge to model_2	
-		merge_slice(tmp, myslice, BlockSize, (int)__det_x, (int)__det_y);
+		merge_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1]);
 
 	}
-
-	// test performance
-	float estime = cuda_return_time();
-	printf("use %.5f ms\n", estime);
 
 	// scaling
 	merge_scaling(BlockSize, BlockSize);
 
+	// test performance
+	float estime = cuda_return_time();
+	printf("use %.5f ms\n", estime);
 
 
 	// download model_2 from gpu
