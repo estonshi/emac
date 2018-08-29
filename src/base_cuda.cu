@@ -7,7 +7,7 @@
 extern "C" void setDevice(int gpu_id);
 
 extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
-	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w);
+	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
 extern "C" void download_model2_from_gpu(float *model_2, int vol_size);
 
@@ -46,7 +46,7 @@ void setDevice(int gpu_id)
 
 
 void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
-	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w)
+	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins)
 {
 	// constant
 	int pat_s[] = {det_x, det_y};
@@ -57,6 +57,8 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 	cudaMemcpyToSymbol(__center_gpu, det_center, sizeof(float)*2);
 	cudaMemcpyToSymbol(__stoprad_gpu, stopr, sizeof(int));
 
+	// fft handler
+	cufftPlan1d(&__cufft_plan_1d, ang_corr_bins, CUFFT_C2C, ang_corr_bins);
 
 	// mask & det
 	cudaMalloc((void**)&__det_gpu, pat_s[0]*pat_s[1]*sizeof(float)*3);
@@ -130,6 +132,9 @@ void free_cuda_all()
 	// destroy cuda event
 	cudaEventDestroy(__custart);
 	cudaEventDestroy(__custop);
+
+	// destroy cufft handler
+	cufftDestroy(__cufft_plan_1d);
 
 	// reset
 	cudaDeviceReset();
@@ -625,7 +630,34 @@ __global__ void polar_transfer(cufftReal* polar, int partition)
 }
 
 
-__global__ void cu_complex_l(cufftComplex* mycomplex, cufftReal* rets, int N)
+// transfer cufftReal to cufftComplex
+__global__ void cu_Real2Complex(cufftReal* myReal, cufftComplex* mycomplex, int N)
+{
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if(i<N){
+		mycomplex[i].x = myReal[i];
+		mycomplex[i].y = 0;
+	}
+	return;
+}
+
+
+// calculate complex norm of complex
+// 1d grid and 1d block
+__global__ void cu_complex_l(cufftComplex* mycomplex, cufftComplex* rets, int N)
+{
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if(i<N){
+		rets[i].x = mycomplex[i].x * mycomplex[i].x + mycomplex[i].y * mycomplex[i].y;
+		rets[i].y = 0;
+	}
+	return;
+}
+
+
+// calculate real norm of complex
+// 1d grid and 1d block
+__global__ void cu_complex_r(cufftComplex* mycomplex, cufftReal* rets, int N)
 {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if(i<N){
@@ -641,17 +673,14 @@ void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, 
 
 	// locate device memory
 	cufftReal *pat_device;
-	cudaErrchk(cudaMalloc((void**)&pat_device, det_x*det_y*sizeof(cufftReal)));
+	cudaMalloc((void**)&pat_device, det_x*det_y*sizeof(cufftReal));
 	cudaErrchk(cudaBindTexture(NULL, __tex_01, pat_device, det_x*det_y*sizeof(cufftReal)))
 
 	cufftReal *polar_device;
-	cudaErrchk(cudaMalloc((void**)&polar_device, partition*partition*sizeof(cufftReal)));
+	cudaMalloc((void**)&polar_device, partition*partition*sizeof(cufftReal));
 
-	cufftComplex *re_device;
-	cudaErrchk(cudaMalloc((void**)&re_device, (partition/2+1)*partition*sizeof(cufftComplex)));
-
-	cufftReal *norm_device;
-	cudaErrchk(cudaMalloc((void**)&norm_device, (partition/2+1)*partition*sizeof(cufftReal)));
+	cufftComplex *freq_device;
+	cudaMalloc((void**)&freq_device, partition*partition*sizeof(cufftComplex));
 
 	// memcpy
 	cudaErrchk(cudaMemcpy(pat_device, pat, det_x*det_y*sizeof(cufftReal), cudaMemcpyHostToDevice));
@@ -661,25 +690,28 @@ void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, 
 	dim3 blocks((partition+BlockSize-1)/BlockSize, (partition+BlockSize-1)/BlockSize);
 	polar_transfer<<<blocks, threads>>>(polar_device, partition);
 
-	// init cufft handler
-	cufftHandle plan_many_signal;
-	cufftPlan1d(&plan_many_signal, partition, CUFFT_R2C, partition);
+	// transfer polar_device to cufftComplex
+	cu_Real2Complex<<<partition, partition>>>(polar_device, freq_device, partition*partition);
 
+	// cufft handler has been initiated by gpu_var_init()
 	// run fft
-	cufftErrchk(cufftExecR2C(plan_many_signal, polar_device, re_device));
+	cufftErrchk(cufftExecC2C(__cufft_plan_1d, freq_device, freq_device, CUFFT_FORWARD));
 
 	// self dot
-	cu_complex_l<<<partition,(partition/2+1)>>>(re_device, norm_device, (partition/2+1)*partition);
+	cu_complex_l<<<partition, partition>>>(freq_device, freq_device, partition*partition);
+	
+	// run ifft and get angular correlation
+	cufftErrchk(cufftExecC2C(__cufft_plan_1d, freq_device, freq_device, CUFFT_INVERSE));
+
+	// norm
+	cu_complex_r<<<partition, partition>>>(freq_device, polar_device, partition*partition);
 
 	// memcpy
-	cudaErrchk(cudaMemcpy(result, norm_device, (partition/2+1)*partition*sizeof(cufftReal), cudaMemcpyDeviceToHost));
+	cudaErrchk(cudaMemcpy(result, polar_device, partition*partition*sizeof(cufftReal), cudaMemcpyDeviceToHost));
 
 	// destroy
-	cufftDestroy(plan_many_signal);
 	cudaUnbindTexture(__tex_01);
 	cudaFree(pat_device);
-	cudaFree(re_device);
-	cudaFree(norm_device);
 	cudaFree(polar_device);
-
+	cudaFree(freq_device);
 }

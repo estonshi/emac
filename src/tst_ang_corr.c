@@ -28,6 +28,11 @@ int main(int argc, char** argv){
 				break;
 			case 'p':
 				bins = atoi(optarg);
+				if(bins<=0){
+					printf("[error] partition bins <= 0\n");
+					exit(1);
+				}
+				if(bins%2 != 0) bins++;
 				break;
 			case 'm':
 				strcpy(mask_fn, optarg);
@@ -41,6 +46,7 @@ int main(int argc, char** argv){
 			case 'h':
 				printf("options:\n");
 				printf("         -f [signal file]\n");
+				printf("         -m [mask file]\n");
 				printf("         -x [pattern pat_s[0]]\n");
 				printf("         -y [pattern pat_s[1]]\n");
 				printf("         -p [number of partition bins]\n");
@@ -62,7 +68,7 @@ int main(int argc, char** argv){
 	// locate host memory
 	float* signalx = (float*) malloc(pat_s[0]*pat_s[1]*sizeof(float));
 	int *mask = (int*) malloc(pat_s[0]*pat_s[1]*sizeof(int));
-	float* result = (float*) malloc(bins*(bins/2+1)*sizeof(float));
+	float* result = (float*) malloc(bins*bins*sizeof(float));
 	float center[2];
 	center[0] = (pat_s[0]-1)/2.0;
 	center[1] = (pat_s[1]-1)/2.0;
@@ -98,7 +104,7 @@ int main(int argc, char** argv){
 
 	// init gpu var
 	gpu_var_init((int)__det_x, (int)__det_y, center, __qmax_len, (int)__stoprad, 
-										det, mask, mymodel, model_2, merge_w);
+										det, mask, mymodel, model_2, merge_w, bins);
 
 
 	// test performance
@@ -109,12 +115,12 @@ int main(int argc, char** argv){
 
 	// test performance
 	float estime = cuda_return_time();
-	printf("use %.5f ms\n", estime);
+	printf("use %.5f ms to calculate %d pattern(s)\n", estime, 1);
 
 
 	//save
-	fp = fopen("test_cufft.bin", "wb");
-	fwrite(result, sizeof(float), bins*(bins/2+1), fp);
+	fp = fopen("./output/tst_ang_corr.bin", "wb");
+	fwrite(result, sizeof(float), bins*bins, fp);
 	fclose(fp);
 	// free
 	free(signalx);

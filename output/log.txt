@@ -1,7 +1,7 @@
 [Initiate]
 Number of rotations   :   14553
 Number of patterns    :   25
-Mean photon count     :   31786.398438
+Mean photon count     :   21611.242188
 Need Scaling          :   yes
 Merged volume size    :   103 x 103 x 103
 Initial model         :   random

@@ -6,7 +6,7 @@ int main(int argc, char** argv){
 	char save_file[999];
 	strcpy(save_file, "../input/orientations.quat");
 
-	int c;
+	int i, c;
 	bool change_param = false;
 	int mode = 0;
 	while( (c = getopt(argc, argv, "n:s:m:h")) != -1 ){
@@ -65,7 +65,7 @@ int main(int argc, char** argv){
 	FILE *fp;
 	fp = fopen(save_file, "w+");
 	
-	for(int i=0; i<number; i++){
+	for(i=0; i<number; i++){
 		fprintf(fp, "%.4f %.4f %.4f %.4f\n", quaternions[i*4], quaternions[i*4+1], quaternions[i*4+2], quaternions[i*4+3]);
 	}
 

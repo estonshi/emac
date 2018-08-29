@@ -157,7 +157,7 @@ int main(int argc, char** argv){
 
 	// init gpu var
 	gpu_var_init((int)__det_x, (int)__det_y, center, (int)__qmax_len, 20, 
-										det, mask, mymodel, model_2, merge_w);
+									det, mask, mymodel, model_2, merge_w, 256);
 
 
 	// test performance
@@ -190,18 +190,18 @@ int main(int argc, char** argv){
 
 	// test performance
 	float estime = cuda_return_time();
-	printf("use %.5f ms\n", estime);
+	printf("use %.5f ms for slicing & merging %d pattern(s)\n", estime, num_quat);
 
 
 	// download model_2 from gpu
 	download_model2_from_gpu(model_2, (int)__qmax_len);
 
 	// write
-	fp = fopen("tst_slicing.bin", "wb");
+	fp = fopen("./output/tst_slicing.bin", "wb");
 	fwrite(myslice, sizeof(float), pat_s[0]*pat_s[1], fp);
 	fclose(fp);
 
-	fp = fopen("tst_merging.bin", "wb");
+	fp = fopen("./output/tst_merging.bin", "wb");
 	fwrite(model_2, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);
 	fclose(fp);
 

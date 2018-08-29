@@ -7,12 +7,15 @@
 #include <cufft.h>
 #include "base.h"
 
+
 // global device variable
 int *__mask_gpu;
 float *__det_gpu;
 float *__w_gpu;
 cudaArray *__model_1_gpu;
 float *__model_2_gpu;
+cufftHandle __cufft_plan_1d;
+
 
 // texture
 texture<float> __tex_01;

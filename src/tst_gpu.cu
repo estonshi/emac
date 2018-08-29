@@ -9,7 +9,7 @@ int main(){
     cudaDeviceProp prop;
     
     custatus = cudaGetDeviceCount(&gpu_num);
-    printf("GPU numbers          : %d\n", gpu_num);
+    printf("Number of GPUs       : %d\n", gpu_num);
 
     custatus = cudaSetDevice(0);
     if(custatus != cudaSuccess){
@@ -19,9 +19,11 @@ int main(){
 
     cudaGetDeviceProperties(&prop, 0);
     printf("Device name          : %s\n", prop.name);
-    printf("sharedMemPerBlock(KB): %u\n", (unsigned int)prop.sharedMemPerBlock/1024);
+    printf("Compute Capability   : %d.%d\n", prop.major, prop.minor);
+    printf("totalGlobalMem       : %.1f GB\n", prop.totalGlobalMem/1024/1024/1024.0);
+    printf("sharedMemPerBlock    : %u KB\n", (unsigned int)prop.sharedMemPerBlock/1024);
     printf("maxThreadsPerBlock   : %d\n", prop.maxThreadsPerBlock);
     printf("maxGridSize          : %d, %d, %d\n", prop.maxGridSize[0], prop.maxGridSize[1], prop.maxGridSize[2]);
     printf("regPerBlock          : %d\n", prop.regsPerBlock);
-    printf("totalGlobalMem(MB)   : %u\n", (unsigned int)(prop.totalGlobalMem/1024/1024));
+    
 }

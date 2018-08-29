@@ -18,6 +18,7 @@ bool load_emac_prop(char* filename, uint32* num_data, uint32* size_x, uint32* si
 float load_emac_dataset(char* filename, emac_pat* dataset){
 	float mean_count = 0, photon_count;
 	uint32 num_data, size_x, size_y;
+	int i, k;
 	FILE* fp;
 	fp = fopen(filename, "rb");
 	if( fp == NULL ){
@@ -30,7 +31,7 @@ float load_emac_dataset(char* filename, emac_pat* dataset){
 	// read data
 	emac_pat* thisp = dataset;
 	uint32 one_count, mul_count, data_len;
-	for(int i=0; i<num_data; i++){
+	for(i=0; i<num_data; i++){
 		fread(&data_len, sizeof(uint32), 1, fp);
 		fread(&one_count, sizeof(uint32), 1, fp);
 		mul_count = (data_len - one_count - 2)/2;
@@ -48,7 +49,7 @@ float load_emac_dataset(char* filename, emac_pat* dataset){
 			thisp->next = NULL;
 		// calculate total photon count
 		photon_count = (float)one_count;
-		for(int k=0; k<mul_count; k++)
+		for(k=0; k<mul_count; k++)
 			photon_count += (float)thisp->mul_counts[k];
 		thisp->photon_count = (float)photon_count;
 		mean_count += photon_count/(float)num_data;
@@ -70,17 +71,18 @@ float parse_pat_full(emac_pat* pat_struct, uint32 size_x, bool scale, float** th
 	uint32 one_count = pat_struct->one_pix;
 	uint32 mul_count = pat_struct->mul_pix;
 	uint32 x, y;
+	int i;
 	float scale_factor = 1.0;
 	if(scale) scale_factor = pat_struct->scale_factor;
 	// one photon
-	for(int i=0; i<one_count; i++){
+	for(i=0; i<one_count; i++){
 		uint32 loc = pat_struct->one_loc[i];
 		x = loc/size_x;
 		y = loc%size_x;
 		this_pat[x][y] = 1.0 * scale_factor;
 	}
 	// multi photon
-	for(int i=0; i<mul_count; i++){
+	for(i=0; i<mul_count; i++){
 		uint32 loc = pat_struct->mul_loc[i];
 		uint32 count = pat_struct->mul_counts[i];
 		x = loc/size_x;

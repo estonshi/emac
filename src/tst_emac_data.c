@@ -5,7 +5,7 @@ int main(int argc, char** argv){
 	char input[999];
 	char output[999];
 
-	int c;
+	int i, j, c;
 	while( (c = getopt(argc, argv, "i:o:h")) != -1 ){
 		switch (c){
 			case 'i':
@@ -37,14 +37,14 @@ int main(int argc, char** argv){
 	emac_pat* this_data = dataset;
 	// init pat
 	float** pat = (float**) calloc(size_x, sizeof(float*));
-	for(int i=0; i<size_x; i++){
+	for(i=0; i<size_x; i++){
 		pat[i] = (float*) calloc(size_y, sizeof(float));
 	}
 	float this_photons = 0;
-	for(int i=0; i<num_data; i++){
+	for(i=0; i<num_data; i++){
 		if(i == 0 || i == num_data-1){
 			this_photons = parse_pat_full(this_data, size_x, true, pat);
-			for(int j=0; j<size_x; j++){
+			for(j=0; j<size_x; j++){
 				fwrite(pat[j], sizeof(float), size_y, fp);
 			}
 			printf("Total photons after scaling = %f\n", this_photons);
@@ -52,7 +52,7 @@ int main(int argc, char** argv){
 		this_data = this_data->next;
 	}
 	// free pat
-	for(int i=0; i<size_y; i++){
+	for(i=0; i<size_y; i++){
 		free((void *)pat[i]);
 	}
 	free((void *)pat);

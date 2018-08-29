@@ -46,6 +46,7 @@ void write_log(uint32 iter_num, float used_time, float rms_change, float beta, u
 
 
 float read_log(char* read_item, int iter_num){
+	int i;
 	if(iter_num == 0){
 		printf("[ERROR] Iter number start from 1 or give -1 to ignore.\n");
 		return -1;
@@ -82,7 +83,7 @@ float read_log(char* read_item, int iter_num){
 		token = strtok(line, " \n");
 		iter_total = atoi(token);
 		if(iter_num != iter_total) continue;
-		for(int i=0; i<index; i++){
+		for(i=0; i<index; i++){
 			token = strtok(NULL, " \n");
 		}
 		returned = atof(token);
@@ -118,6 +119,7 @@ bool load_model(char* model_file, uint32 size, float* model){
 
 bool setup(char* config_file, bool resume){
 
+	int i;
 	// read config file
 	FILE* fp;
 	fp = fopen(config_file, "r");
@@ -240,7 +242,7 @@ bool setup(char* config_file, bool resume){
 	gen_quaternions(quat_lev, 0, __quat);
 
 	// load detector pixels' qinfo, func from params.h
-	__mask = (int*) malloc(__det_x * __det_y * sizeof(bool));
+	__mask = (int*) malloc(__det_x * __det_y * sizeof(int));
 	__det = (float*) malloc(__det_x * __det_y * 3 * sizeof(float));
 	if( !load_det_info(__det_path, __mask, __det) ) 
 		return false;
@@ -262,7 +264,7 @@ bool setup(char* config_file, bool resume){
 		else{
 			printf("Using random initial model\n");
 			srand(time(NULL));
-			for(int i=0; i<__qmax_len*__qmax_len*__qmax_len; i++){
+			for(i=0; i<__qmax_len*__qmax_len*__qmax_len; i++){
 				__model_1[i] = (float) rand() / RAND_MAX * 2 * dataset_mean_count;
 				__merge_w[i] = 1.0f;
 			}
@@ -290,7 +292,7 @@ bool setup(char* config_file, bool resume){
 		if(__scale){
 			fp = fopen(line, "w");
 			emac_pat* thisp = __dataset;
-			for(int i=0; i<__num_data; i++){
+			for(i=0; i<__num_data; i++){
 				fprintf(fp, "%.4f\n", thisp->scale_factor);
 				thisp = thisp->next;
 			}
@@ -342,7 +344,7 @@ bool setup(char* config_file, bool resume){
 		if( !load_model(init_model, __qmax_len*__qmax_len*__qmax_len, __model_1) )
 			return false;
 
-		for(int i=0; i<__qmax_len*__qmax_len*__qmax_len; i++){
+		for(i=0; i<__qmax_len*__qmax_len*__qmax_len; i++){
 			__merge_w[i] = 1.0f;
 		}
 
@@ -382,12 +384,13 @@ void free_all(){
 	// free mask
 	free(__mask);
 	// free dataset
-	emac_pat *thisp = __dataset->next;
+	emac_pat *thisp = __dataset;
+	emac_pat *nextp;
 	while(thisp != NULL){
+		nextp = thisp->next;
 		free(thisp);
-		thisp = thisp->next;
+		thisp = nextp;
 	}
-	free(__dataset);
 }
 
 
@@ -395,7 +398,7 @@ void free_all(){
 int main(int argc, char** argv){
 	char config_file[999];
 
-	int c;
+	int i, c;
 	bool resume = false;
 	while( (c = getopt(argc, argv, "c:rh")) != -1 ){
 		switch (c){
@@ -424,7 +427,7 @@ int main(int argc, char** argv){
 		return -1;
 	}
 
-	for(uint32 i=1; i<=3; i++){
+	for(i=1; i<=3; i++){
 		write_log(__iter_now, 300.0f, 3.3f, __beta, __quat_num, 1.45);
 		__iter_now ++;
 		if( __iter_now != 1 && (__iter_now-1) % __beta_jump == 0)

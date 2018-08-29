@@ -72,10 +72,11 @@ void quat2rot(double q[4], double rot[3][3]){
 void make_quat_rot(double q[4], double v[3], double v1[3], double shift) {
 	double rot[3][3];
 	quat2rot(q, rot);
+	int i,j;
 
-	for(int i=0; i<3; i++){
+	for(i=0; i<3; i++){
 		v1[i] = 0;
-		for(int j=0; j<3; j++){
+		for(j=0; j<3; j++){
 			v1[i] += rot[i][j] * v[j];
 		}
 		v1[i] += shift;
@@ -97,14 +98,14 @@ void gen_quaternions(int num_level, int mode, float* quaternions){
 	double point[3] = {0,0,0};
 
 	// calculate orientations and write to file
-	int ii;
+	int i, ii, j;
 	double theta, cphi, sphi;
 	double ang_1;
 	double axis_1[3] = {0,0,0};
 	double quat_final[4];
 	double init[3] = {0,0,1};
 
-	for(int i=0;i<N;i++){
+	for(i=0;i<N;i++){
 		switch (mode){
 			// two different modes
 			case 0:
@@ -136,7 +137,7 @@ void gen_quaternions(int num_level, int mode, float* quaternions){
 		cross_mul(init, point, axis_1, 1);
 		double quat_1[4] = {cos(ang_1/2.0), axis_1[0]*sin(ang_1/2.0), axis_1[1]*sin(ang_1/2.0), axis_1[2]*sin(ang_1/2.0)};
 		// calculate inner rotation
-		for(int j=0;j<num_level;j++){
+		for(j=0;j<num_level;j++){
 			phi = j*2.0*PI/num_level;
 			double quat_2[4] = {cos(phi/2.0), point[0]*sin(phi/2.0), point[1]*sin(phi/2.0), point[2]*sin(phi/2.0)};
 			quat_mul(quat_2, quat_1, quat_final);
