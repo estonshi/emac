@@ -19,6 +19,8 @@ bool load_emac_prop(char* filename, uint32* num_data, uint32* size_x, uint32* si
 
 float load_emac_dataset(char* filename, emac_pat* dataset);
 
-float parse_pat_full(emac_pat* pat_struct, uint32 size_x, bool scale, float** this_pat);
+float parse_pat_full(emac_pat* pat_struct, uint32 size_x, bool scale, float** this_pat); // deprecated
+
+float parse_pattern(emac_pat* pat_struct, uint32 length, bool scale, float *this_pat);
 
 #endif

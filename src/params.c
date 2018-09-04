@@ -12,6 +12,8 @@ bool load_det_info(char* det_file, int* mask, float* det){
 	char line[999], *token;
 	int line_num = 0;
 	uint32 q_max_len;
+	__num_mask_ron[0] = 0;
+	__num_mask_ron[1] = 0;
 
 	while (fgets(line, 999, fp) != NULL) {
 		if(line_num < __det_x * __det_y){
@@ -19,6 +21,8 @@ bool load_det_info(char* det_file, int* mask, float* det){
 			det[line_num*3+1] = atof(strtok(NULL, " \n"));
 			det[line_num*3+2] = atof(strtok(NULL, " \n"));
 			mask[line_num] = atoi(strtok(NULL, " \n"));
+			if(mask[line_num] == 1) __num_mask_ron[1]++;
+			else if(mask[line_num] == 2) __num_mask_ron[0]++;
 			line_num ++;
 		}
 		else
@@ -130,7 +134,6 @@ bool setup(char* config_file, bool resume){
 	char line[999], *token;
 
 	int temp_value_i;
-	float dataset_mean_count;
 	char init_model[999];
 	int quat_lev;
 	uint32 q_max_len;
@@ -230,11 +233,11 @@ bool setup(char* config_file, bool resume){
 	}
 
 	__dataset = (emac_pat*) malloc(sizeof(emac_pat));
-	dataset_mean_count = load_emac_dataset(__data_path, __dataset);
-	if( dataset_mean_count == -1 ) return false;
+	__dataset_mean_count = load_emac_dataset(__data_path, __dataset);
+	if( __dataset_mean_count == -1 ) return false;
 
 	printf("Number of patterns is         : %u\n", __num_data);
-	printf("Dataset mean photon count is  : %f\n", dataset_mean_count);
+	printf("Dataset mean photon count is  : %f\n", __dataset_mean_count);
 	printf("Need scaling                  : %s\n", __scale ? "true" : "false");
 
 	// generate quaternion, func from gen_quat.h
@@ -265,7 +268,7 @@ bool setup(char* config_file, bool resume){
 			printf("Using random initial model\n");
 			srand(time(NULL));
 			for(i=0; i<__qmax_len*__qmax_len*__qmax_len; i++){
-				__model_1[i] = (float) rand() / RAND_MAX * 2 * dataset_mean_count;
+				__model_1[i] = (float) rand() / RAND_MAX * 2 * __dataset_mean_count;
 				__merge_w[i] = 1.0f;
 			}
 		}
@@ -309,7 +312,7 @@ bool setup(char* config_file, bool resume){
 		fprintf(fp, "[Initiate]\n");
 		fprintf(fp, "Number of rotations   :   %u\n", __quat_num);
 		fprintf(fp, "Number of patterns    :   %u\n", __num_data);
-		fprintf(fp, "Mean photon count     :   %f\n", dataset_mean_count);
+		fprintf(fp, "Mean photon count     :   %f\n", __dataset_mean_count);
 		if(__scale)
 			fprintf(fp, "Need Scaling          :   yes\n");
 		else

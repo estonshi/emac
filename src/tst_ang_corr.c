@@ -94,24 +94,27 @@ int main(int argc, char** argv){
 	fclose(fp);
 
 
-	// fake det, mymodel, model_2 and merge_w. All set 0
+	// fake num_mask_ron, det, mymodel, model_2 and merge_w. All set 0
 	float *det, *mymodel, *model_2, *merge_w;
 	det = (float*) calloc(pat_s[0]*pat_s[1]*3, sizeof(float));
 	mymodel = (float*) calloc(__qmax_len*__qmax_len*__qmax_len, sizeof(float));
 	model_2 = (float*) calloc(__qmax_len*__qmax_len*__qmax_len, sizeof(float));
 	merge_w = (float*) calloc(__qmax_len*__qmax_len*__qmax_len, sizeof(float));
+	int num_mask_ron[2] = {0,0};
 
 
 	// init gpu var
-	gpu_var_init((int)__det_x, (int)__det_y, center, __qmax_len, (int)__stoprad, 
+	gpu_var_init((int)__det_x, (int)__det_y, center, num_mask_ron, __qmax_len, (int)__stoprad, 
 										det, mask, mymodel, model_2, merge_w, bins);
 
 
 	// test performance
 	cuda_start_event();
 
+	int i;
+	for(i=0;i<14553;i++)
 	// fft
-	do_angcorr(bins, signalx, result, pat_s[0], pat_s[1], 16);
+		do_angcorr(bins, signalx, result, pat_s[0], pat_s[1], 16);
 
 	// test performance
 	float estime = cuda_return_time();

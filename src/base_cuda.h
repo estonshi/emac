@@ -16,6 +16,11 @@ cudaArray *__model_1_gpu;
 float *__model_2_gpu;
 cufftHandle __cufft_plan_1d;
 
+// global device buffer memory
+float *__myslice_device;
+float *__mypattern_device;
+float *__mapped_array_device, *__mapped_array_host;
+
 
 // texture
 texture<float> __tex_01;
@@ -29,6 +34,10 @@ __constant__ float __center_gpu[2];
 __constant__ float __rotm_gpu[9];
 __constant__ int __vol_len_gpu[1];
 __constant__ int __stoprad_gpu[1];
+__constant__ int __num_mask_ron_gpu[2];
+
+//const value
+const int __ThreadPerBlock = 256;
 
 
 // cuda event
@@ -56,7 +65,7 @@ inline void gpuFFTAssert(cufftResult code, const char *file, int line)
 {
 	if( code != CUFFT_SUCCESS )
 	{
-		printf("GPU-FFT-assert : %s %s %d\n", "CUFFT FAILED.", file, line);
+		printf("GPU-FFT-assert : %s %s %d\n", "CUFFT failed.", file, line);
 		exit(code);
 	}
 }
@@ -68,7 +77,7 @@ inline void gpuInitAssert(const char *file, int line)
 {
 	if( !__initiated )
 	{
-		printf("GPU-Init-assert : %s %s %d\n", "GPU variables are not initiated.", file, line);
+		printf("GPU-Init-assert : %s %s %d\n", "GPU environment hasn't been initiated.", file, line);
 		exit(1);
 	}
 }

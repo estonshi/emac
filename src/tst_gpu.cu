@@ -21,6 +21,7 @@ int main(){
     printf("Device name          : %s\n", prop.name);
     printf("Compute Capability   : %d.%d\n", prop.major, prop.minor);
     printf("totalGlobalMem       : %.1f GB\n", prop.totalGlobalMem/1024/1024/1024.0);
+    printf("canMapHostMem        : %d\n", prop.canMapHostMemory);
     printf("sharedMemPerBlock    : %u KB\n", (unsigned int)prop.sharedMemPerBlock/1024);
     printf("maxThreadsPerBlock   : %d\n", prop.maxThreadsPerBlock);
     printf("maxGridSize          : %d, %d, %d\n", prop.maxGridSize[0], prop.maxGridSize[1], prop.maxGridSize[2]);

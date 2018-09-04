@@ -4,12 +4,16 @@
 
 /* All functions for C modules to call  */
 
+/*  gpu setup & init & utils  */
+
 extern "C" void setDevice(int gpu_id);
 
-extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
+extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
 extern "C" void download_model2_from_gpu(float *model_2, int vol_size);
+
+extern "C" void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y);
 
 extern "C" void free_cuda_all();
 
@@ -17,13 +21,23 @@ extern "C" void cuda_start_event();
 
 extern "C" float cuda_return_time();
 
+/*   slicing and merging   */
+
 extern "C" void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
 
 extern "C" void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
 
 extern "C" void merge_scaling(int GridSize, int BlockSize);
 
+/*   angular correlation   */
+
 extern "C" void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize);
+
+/*       likelihood        */
+
+extern "C" void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood);
+
+
 
 
 /*********************************************/
@@ -45,7 +59,7 @@ void setDevice(int gpu_id)
 
 
 
-void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
+void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins)
 {
 	// constant
@@ -56,6 +70,7 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 	cudaMemcpyToSymbol(__pats_gpu, pat_s, sizeof(int)*2);
 	cudaMemcpyToSymbol(__center_gpu, det_center, sizeof(float)*2);
 	cudaMemcpyToSymbol(__stoprad_gpu, stopr, sizeof(int));
+	cudaMemcpyToSymbol(__num_mask_ron_gpu, num_mask_ron, sizeof(int)*2);
 
 	// fft handler
 	cufftPlan1d(&__cufft_plan_1d, ang_corr_bins, CUFFT_C2C, ang_corr_bins);
@@ -73,7 +88,7 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 	cudaChannelFormatDesc volDesc = cudaCreateChannelDesc<float>();
 	cudaExtent volExt = make_cudaExtent((int)vol_size, (int)vol_size, (int)vol_size);
 	cudaMemcpy3DParms volParms = {0};
-	// model_1
+		// model_1
 	cudaMalloc3DArray(&__model_1_gpu, &volDesc, volExt);
 	volParms.srcPtr = make_cudaPitchedPtr((void*)init_model_1, sizeof(float)*vol_size, (int)vol_size, (int)vol_size);
 	volParms.dstArray = __model_1_gpu;
@@ -81,13 +96,28 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 	volParms.kind = cudaMemcpyHostToDevice;
 	cudaMemcpy3D(&volParms);
 	cudaBindTextureToArray(__tex_model, __model_1_gpu);
-	// model_2
+		// model_2
 	cudaMalloc((void**)&__model_2_gpu, vol_size*vol_size*vol_size*sizeof(float));
 	cudaMemcpy(__model_2_gpu, init_model_2, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice);
-	// merge_w
+		// merge_w
 	cudaMalloc((void**)&__w_gpu, vol_size*vol_size*vol_size*sizeof(float));
 	cudaMemcpy(__w_gpu, init_merge_w, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice);
 
+
+	// __myslice_device & __mypattern_device
+	cudaErrchk(cudaMalloc((void**)&__myslice_device, det_x*det_y*sizeof(float)));
+	cudaErrchk(cudaMalloc((void**)&__mypattern_device, det_x*det_y*sizeof(float)));
+
+	// host allocated mapped array (same size with input pattern)
+	cudaHostAlloc( (void**)&__mapped_array_host, 
+					det_x*det_y*sizeof(float), 
+					cudaHostAllocWriteCombined | cudaHostAllocMapped);
+	cudaErrchk(cudaHostGetDevicePointer(&__mapped_array_device, __mapped_array_host, 0));
+
+
+	// Events
+	cudaErrchk(cudaEventCreate(&__custart));
+    cudaErrchk(cudaEventCreate(&__custop));
 
 	// check error
 	cudaErrchk(cudaDeviceSynchronize());
@@ -100,8 +130,14 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int s
 
 void download_model2_from_gpu(float *new_model_2, int vol_size)
 {
-	cudaMemcpy(new_model_2, __model_2_gpu, 
-		vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyDeviceToHost);
+	cudaErrchk(cudaMemcpy(new_model_2, __model_2_gpu, 
+		vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyDeviceToHost));
+}
+
+
+void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y)
+{
+	cudaErrchk(cudaMemcpy(__mypattern_device, pattern, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
 }
 
 
@@ -129,6 +165,13 @@ void free_cuda_all()
 	// free merge_w
 	cudaFree(__w_gpu);
 
+	// free myslice and mypattern buffer
+	cudaFree(__myslice_device);
+	cudaFree(__mypattern_device);
+
+	// free host allocated mapped memory
+	cudaFreeHost(__mapped_array_host);
+
 	// destroy cuda event
 	cudaEventDestroy(__custart);
 	cudaEventDestroy(__custop);
@@ -147,8 +190,6 @@ void free_cuda_all()
 
 void cuda_start_event()
 {
-	cudaErrchk(cudaEventCreate(&__custart));
-    cudaErrchk(cudaEventCreate(&__custop));
     cudaErrchk(cudaEventRecord(__custart, 0));
 }
 
@@ -160,10 +201,11 @@ float cuda_return_time()
 	cudaErrchk(cudaEventRecord(__custop, 0));
 	cudaErrchk(cudaEventSynchronize(__custop));
 	cudaErrchk(cudaEventElapsedTime(&estime, __custart, __custop));
-	cudaEventDestroy(__custart);
-	cudaEventDestroy(__custop);
 	return estime;
 }
+
+
+
 
 
 
@@ -336,9 +378,6 @@ void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int 
 
 	gpuInitchk();
 
-	float *myslice_device;
-	cudaErrchk(cudaMalloc((void**)&myslice_device, det_x*det_y*sizeof(float)));
-
 	// rotation matrix
 	float rotm[9];
 	get_rotate_matrix(quaternion, rotm);
@@ -349,13 +388,11 @@ void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int 
 	dim3 blocks( (det_x+BlockSize-1)/BlockSize, (det_y+BlockSize-1)/BlockSize );
 
 	// slicing
-	slicing<<<blocks, threads>>>(__det_gpu, myslice_device, __mask_gpu, MASKPIX);
+	slicing<<<blocks, threads>>>(__det_gpu, __myslice_device, __mask_gpu, MASKPIX);
 
 	// copy back
-	cudaErrchk(cudaMemcpy(myslice, myslice_device, det_x*det_y*sizeof(float), cudaMemcpyDeviceToHost));
-
-	// cudafree
-	cudaErrchk(cudaFree(myslice_device));
+	if (myslice != NULL)
+		cudaErrchk(cudaMemcpy(myslice, __myslice_device, det_x*det_y*sizeof(float), cudaMemcpyDeviceToHost));
 
 }
 
@@ -519,9 +556,8 @@ void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, in
 
 	gpuInitchk();
 
-	float *myslice_device;
-	cudaErrchk(cudaMalloc((void**)&myslice_device, det_x*det_y*sizeof(float)));
-	cudaErrchk(cudaMemcpy(myslice_device, myslice, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+	if (myslice != NULL)
+		cudaErrchk(cudaMemcpy(__myslice_device, myslice, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
 
 	// rotation matrix
 	float rotm[9];
@@ -533,10 +569,8 @@ void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, in
 	dim3 blocks( (det_x+BlockSize-1)/BlockSize, (det_y+BlockSize-1)/BlockSize );
 
 	// merging
-	merging<<<blocks, threads>>>(__det_gpu, myslice_device, __mask_gpu, __model_2_gpu, __w_gpu);
+	merging<<<blocks, threads>>>(__det_gpu, __myslice_device, __mask_gpu, __model_2_gpu, __w_gpu);
 
-	// cudafree
-	cudaErrchk(cudaFree(myslice_device));
 
 }
 
@@ -555,6 +589,9 @@ void merge_scaling(int GridSize, int BlockSize)
 	merging_sc<<<blocks, threads>>>(__model_2_gpu, __w_gpu);
 
 }
+
+
+
 
 
 
@@ -714,4 +751,92 @@ void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, 
 	cudaFree(pat_device);
 	cudaFree(polar_device);
 	cudaFree(freq_device);
+}
+
+
+
+
+
+
+/*********************************************/
+
+/*         likelihood & maximization         */
+
+/*********************************************/
+
+
+// Block is 1d and size must be 256 !!!
+// __tex_01 is slice from __model_1_gpu and __tex_02 is input pattern
+// __tex_mask is mask
+// return array (reduced_array) length is blockDim.x
+__global__ void possion_likelihood(float beta, float *reduced_array)
+{
+	__shared__ float cache[__ThreadPerBlock];
+
+	int x ;
+	int global_offset = threadIdx.x + blockIdx.x * blockDim.x;
+	int shared_offset = threadIdx.x;
+
+	x = tex1Dfetch(__tex_mask, global_offset);
+	if(global_offset >= __pats_gpu[0]*__pats_gpu[1] || x > 0){
+		cache[shared_offset] = 0;
+		return;
+	}
+
+	float k, w, s;
+	w = tex1Dfetch(__tex_01, global_offset);
+	k = tex1Dfetch(__tex_02, global_offset);
+
+	s = beta/(__pats_gpu[0]*__pats_gpu[1] - (__num_mask_ron_gpu[0]+__num_mask_ron_gpu[1]));
+	cache[shared_offset] = (k*__logf(w)-w)*s;
+	__syncthreads();
+
+	// reduce
+	x = blockDim.x/2;
+	while(x != 0)
+	{
+		if (shared_offset < x)
+			cache[shared_offset] += cache[shared_offset + x];
+		__syncthreads();
+		x /= 2;
+	}
+
+	if(shared_offset == 0)
+		reduced_array[blockIdx.x] = cache[0];
+
+}
+
+
+// returned "likelihood" is a pointer to a float number
+void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood)
+{
+	gpuInitchk();
+
+	// device memory
+	if (model_slice != NULL)
+		cudaErrchk(cudaMemcpy(__myslice_device, model_slice, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+	if (pattern != NULL)
+		cudaErrchk(cudaMemcpy(__mypattern_device, pattern, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+
+	cudaErrchk(cudaBindTexture(NULL, __tex_01, __myslice_device, det_x*det_y*sizeof(float)));
+	cudaErrchk(cudaBindTexture(NULL, __tex_02, __mypattern_device, det_x*det_y*sizeof(float)));
+
+	int array_length = (det_x*det_y+__ThreadPerBlock-1)/__ThreadPerBlock;
+
+	// calc, __mapped_array_device and __mapped_array_host are initiated in gpu_var_init()
+	possion_likelihood<<<array_length, __ThreadPerBlock>>> (beta, __mapped_array_device);
+	cudaErrchk(cudaThreadSynchronize());
+
+	// reduce
+	float c = 0;
+	int i;
+	for(i=0; i<array_length; i++){
+		c += __mapped_array_host[i];
+	}
+	*likelihood = c;
+
+	// unbind texture
+	cudaUnbindTexture(__tex_01);
+	cudaUnbindTexture(__tex_02);
+
 }

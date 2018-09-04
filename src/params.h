@@ -11,6 +11,8 @@ float __center_x, __center_y;
 
 bool __scale;
 uint32 __num_data;
+int __num_mask_ron[2];
+float __dataset_mean_count;
 float __beta, __beta_mul;
 uint32 __beta_jump;
 uint32 __qmax_len;

@@ -155,8 +155,11 @@ int main(int argc, char** argv){
 	}
 
 
+	// fake num_mask_ron, set to 0
+	int num_mask_ron[2] = {0,0};
+
 	// init gpu var
-	gpu_var_init((int)__det_x, (int)__det_y, center, (int)__qmax_len, 20, 
+	gpu_var_init((int)__det_x, (int)__det_y, center, num_mask_ron, (int)__qmax_len, 20, 
 									det, mask, mymodel, model_2, merge_w, 256);
 
 

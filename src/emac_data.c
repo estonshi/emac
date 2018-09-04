@@ -93,3 +93,25 @@ float parse_pat_full(emac_pat* pat_struct, uint32 size_x, bool scale, float** th
 	return photons;
 }
 
+
+
+float parse_pattern(emac_pat* pat_struct, uint32 length, bool scale, float *this_pat){
+	uint32 one_count = pat_struct->one_pix;
+	uint32 mul_count = pat_struct->mul_pix;
+	int i;
+	float scale_factor = 1.0;
+	if(scale) scale_factor = pat_struct->scale_factor;
+	// one photon
+	for(i=0; i<one_count; i++){
+		uint32 loc = pat_struct->one_loc[i];
+		this_pat[loc] = 1.0 * scale_factor;
+	}
+	// multi photon
+	for(i=0; i<mul_count; i++){
+		uint32 loc = pat_struct->mul_loc[i];
+		uint32 count = pat_struct->mul_counts[i];
+		this_pat[loc] = (float)count * scale_factor;
+	}
+	float photons = pat_struct->photon_count * scale_factor;
+	return photons;
+}

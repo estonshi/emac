@@ -6,10 +6,12 @@
 
 extern void setDevice(int gpu_id);
 
-extern void gpu_var_init(int det_x, int det_y, float det_center[2], int vol_size, int stoprad, 
+extern void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
 extern void download_model2_from_gpu(float *model_2, int vol_size);
+
+extern void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y);
 
 extern void free_cuda_all();
 
@@ -32,6 +34,9 @@ extern void merge_scaling(int GridSize, int BlockSize);
 extern void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize);
 
 
+/*       likelihood        */
+
+extern void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood);
 
 
 #endif
