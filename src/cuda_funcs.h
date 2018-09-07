@@ -31,7 +31,9 @@ extern void merge_scaling(int GridSize, int BlockSize);
 
 /*   angular correlation   */
 
-extern void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize);
+extern void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize, bool inputType);
+
+extern float comp_angcorr(int partition, float *model_slice_ac, float *pattern_ac, int BlockSize);
 
 
 /*       likelihood        */

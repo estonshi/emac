@@ -8,7 +8,7 @@ uint32 __det_x, __det_y;
 
 
 int main(int argc, char** argv){
-	char fn[999], mask_fn[999], det_fn[999], quat_fn[999], line[999];;
+	char fn[999], mask_fn[999], det_fn[999], quat_fn[999], line[999];
 	int c, gpu;
 	int BlockSize = 16;
 	int num_quat;
@@ -184,7 +184,7 @@ int main(int argc, char** argv){
 		// ...
 
 		// merge to model_2	
-		merge_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1]);
+		merge_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1]);
 
 	}
 
@@ -196,13 +196,22 @@ int main(int argc, char** argv){
 	printf("use %.5f ms for slicing & merging %d pattern(s)\n", estime, num_quat);
 
 
-	// download model_2 from gpu
-	download_model2_from_gpu(model_2, (int)__qmax_len);
-
-	// write
-	fp = fopen("./output/tst_slicing.bin", "wb");
+	// slicing examples
+	tmp[0] = quater[0]; tmp[1] = quater[1]; tmp[2] = quater[2]; tmp[3] = quater[3];
+	get_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1], 1);
+	fp = fopen("./output/tst_slicing_1.bin", "wb");
 	fwrite(myslice, sizeof(float), pat_s[0]*pat_s[1], fp);
 	fclose(fp);
+
+	tmp[0] = quater[40]; tmp[1] = quater[41]; tmp[2] = quater[42]; tmp[3] = quater[43];
+	get_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1], 1);
+	fp = fopen("./output/tst_slicing_2.bin", "wb");
+	fwrite(myslice, sizeof(float), pat_s[0]*pat_s[1], fp);
+	fclose(fp);
+
+
+	// download model_2 from gpu
+	download_model2_from_gpu(model_2, (int)__qmax_len);
 
 	fp = fopen("./output/tst_merging.bin", "wb");
 	fwrite(model_2, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);

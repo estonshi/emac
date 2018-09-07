@@ -19,7 +19,12 @@ cufftHandle __cufft_plan_1d;
 // global device buffer memory
 float *__myslice_device;
 float *__mypattern_device;
+float *__slice_AC_device, *__pattern_AC_device;
+// __mapped_array_host corresponds to slice/pattern, __mapped_array_host_2 corresponds to angular correlation map
+// (they are all reduced 1d array, only take a little memory)
+// __mapped_array_device & __mapped_array_device_2 are only device pointers to corresponding host memory
 float *__mapped_array_device, *__mapped_array_host;
+float *__mapped_array_device_2, *__mapped_array_host_2;
 
 
 // texture
@@ -36,7 +41,7 @@ __constant__ int __vol_len_gpu[1];
 __constant__ int __stoprad_gpu[1];
 __constant__ int __num_mask_ron_gpu[2];
 
-//const value
+//const value, must be 2^n
 const int __ThreadPerBlock = 256;
 
 

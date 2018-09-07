@@ -17,10 +17,10 @@ gcc -I $cuda_include -c ./src/tst_ang_corr.c -o ./src/tst_ang_corr.o
 
 gcc -I $cuda_include -c ./src/tst_likelihood.c -o ./src/tst_likelihood.o
 
-gcc ./src/base_cuda.o ./src/tst_merge.o -o ./bin/tst_merge -L $cuda_lib -lcudart -lcufft -lcufftw
+gcc ./src/base_cuda.o ./src/tst_merge.o -o ./bin/tst_merge -L $cuda_lib -lcudart -lcufft -lcufftw -lm
 
-gcc ./src/base_cuda.o ./src/tst_ang_corr.o -o ./bin/tst_ang_corr -L $cuda_lib -lcudart -lcufft -lcufftw
+gcc ./src/base_cuda.o ./src/tst_ang_corr.o -o ./bin/tst_ang_corr -L $cuda_lib -lcudart -lcufft -lcufftw -lm
 
-gcc ./src/base_cuda.o ./src/emac_data.o ./src/tst_likelihood.o -o ./bin/tst_likelihood -L $cuda_lib -lcudart -lcufft -lcufftw
+gcc ./src/base_cuda.o ./src/emac_data.o ./src/tst_likelihood.o -o ./bin/tst_likelihood -L $cuda_lib -lcudart -lcufft -lcufftw -lm
 
 rm -rf ./src/base_cuda.o ./src/tst_merge.o ./src/tst_ang_corr.o ./src/emac_data.o ./src/tst_likelihood.o

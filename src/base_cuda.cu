@@ -31,7 +31,9 @@ extern "C" void merge_scaling(int GridSize, int BlockSize);
 
 /*   angular correlation   */
 
-extern "C" void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize);
+extern "C" void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize, bool inputType);
+
+extern "C" float comp_angcorr(int partition, float *model_slice_ac, float *pattern_ac, int BlockSize);
 
 /*       likelihood        */
 
@@ -62,6 +64,7 @@ void setDevice(int gpu_id)
 void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins)
 {
+
 	// constant
 	int pat_s[] = {det_x, det_y};
 	int vols[] = {vol_size};
@@ -72,8 +75,10 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2]
 	cudaMemcpyToSymbol(__stoprad_gpu, stopr, sizeof(int));
 	cudaMemcpyToSymbol(__num_mask_ron_gpu, num_mask_ron, sizeof(int)*2);
 
+
 	// fft handler
 	cufftPlan1d(&__cufft_plan_1d, ang_corr_bins, CUFFT_C2C, ang_corr_bins);
+
 
 	// mask & det
 	cudaMalloc((void**)&__det_gpu, pat_s[0]*pat_s[1]*sizeof(float)*3);
@@ -108,20 +113,33 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2]
 	cudaErrchk(cudaMalloc((void**)&__myslice_device, det_x*det_y*sizeof(float)));
 	cudaErrchk(cudaMalloc((void**)&__mypattern_device, det_x*det_y*sizeof(float)));
 
-	// host allocated mapped array (same size with input pattern)
+
+	// host allocated mapped array
+	int size_tmp = ((det_x*det_y+__ThreadPerBlock-1)/__ThreadPerBlock);
 	cudaHostAlloc( (void**)&__mapped_array_host, 
-					det_x*det_y*sizeof(float), 
+					size_tmp*sizeof(float), 
 					cudaHostAllocWriteCombined | cudaHostAllocMapped);
 	cudaErrchk(cudaHostGetDevicePointer(&__mapped_array_device, __mapped_array_host, 0));
+
+	size_tmp = ((ang_corr_bins*ang_corr_bins+__ThreadPerBlock-1)/__ThreadPerBlock);
+	cudaHostAlloc( (void**)&__mapped_array_host_2, 
+					size_tmp*sizeof(float), 
+					cudaHostAllocWriteCombined | cudaHostAllocMapped);
+	cudaErrchk(cudaHostGetDevicePointer(&__mapped_array_device_2, __mapped_array_host_2, 0));
+
+
+	// angular correlation device buffer
+	cudaErrchk(cudaMalloc((void**)&__slice_AC_device, ang_corr_bins*ang_corr_bins*sizeof(float)));
+	cudaErrchk(cudaMalloc((void**)&__pattern_AC_device, ang_corr_bins*ang_corr_bins*sizeof(float)));
 
 
 	// Events
 	cudaErrchk(cudaEventCreate(&__custart));
     cudaErrchk(cudaEventCreate(&__custop));
 
+
 	// check error
 	cudaErrchk(cudaDeviceSynchronize());
-
 	// change init flag
 	__initiated = 1;
 }
@@ -171,6 +189,10 @@ void free_cuda_all()
 
 	// free host allocated mapped memory
 	cudaFreeHost(__mapped_array_host);
+
+	// free __angcorr_device
+	cudaFree(__slice_AC_device);
+	cudaFree(__pattern_AC_device);
 
 	// destroy cuda event
 	cudaEventDestroy(__custart);
@@ -698,37 +720,99 @@ __global__ void cu_complex_r(cufftComplex* mycomplex, cufftReal* rets, int N)
 {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if(i<N){
-		rets[i] = mycomplex[i].x * mycomplex[i].x + mycomplex[i].y * mycomplex[i].y;
+		rets[i] = sqrt(mycomplex[i].x * mycomplex[i].x + mycomplex[i].y * mycomplex[i].y);
 	}
 	return;
 }
 
 
-void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize){
+// calculate difference between two angular correlation maps
+// Block is 1d and size must be __ThreadPerBlock !!!
+// Grid is also 1d and size must be (partition*partition+__ThreadPerBlock-1)/__ThreadPerBlock !!!
+// __tex_01 is map1 and __tex_02 is map2
+__global__ void angcorr_diff(float *reduced_array, int N)
+{
+	__shared__ float cache[__ThreadPerBlock];
 
+	int x;
+	float k, w;
+	int global_offset = threadIdx.x + blockIdx.x * blockDim.x;
+	int shared_offset = threadIdx.x;
+
+	if(global_offset >= N){
+		cache[shared_offset] = 0;
+		return;
+	}
+
+	w = tex1Dfetch(__tex_01, global_offset);
+	k = tex1Dfetch(__tex_02, global_offset);
+
+	cache[shared_offset] = abs(w - k)/k;
+	//printf("%f, %f\n", w, k);
+
+	__syncthreads();
+
+	// reduce
+	x = blockDim.x/2;
+	while(x != 0)
+	{
+		if (shared_offset < x)
+			cache[shared_offset] += cache[shared_offset + x];
+		__syncthreads();
+		x /= 2;
+	}
+
+	if(shared_offset == 0)
+		reduced_array[blockIdx.x] = cache[0];
+}
+
+
+
+
+// if "pat" is model slice, set "inputType" = true ;
+// else if "pat" is exp pattern, set "inputType" = false .
+void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, int BlockSize, bool inputType)
+{
 	gpuInitchk();
 
-	// locate device memory
-	cufftReal *pat_device;
-	cudaMalloc((void**)&pat_device, det_x*det_y*sizeof(cufftReal));
-	cudaErrchk(cudaBindTexture(NULL, __tex_01, pat_device, det_x*det_y*sizeof(cufftReal)))
-
-	cufftReal *polar_device;
-	cudaMalloc((void**)&polar_device, partition*partition*sizeof(cufftReal));
-
+	// middle var
 	cufftComplex *freq_device;
 	cudaMalloc((void**)&freq_device, partition*partition*sizeof(cufftComplex));
-
-	// memcpy
-	cudaErrchk(cudaMemcpy(pat_device, pat, det_x*det_y*sizeof(cufftReal), cudaMemcpyHostToDevice));
 
 	// polar grid
 	dim3 threads(BlockSize,BlockSize);
 	dim3 blocks((partition+BlockSize-1)/BlockSize, (partition+BlockSize-1)/BlockSize);
-	polar_transfer<<<blocks, threads>>>(polar_device, partition);
 
-	// transfer polar_device to cufftComplex
-	cu_Real2Complex<<<partition, partition>>>(polar_device, freq_device, partition*partition);
+
+	// locate device memory & transfer pattern
+	if(inputType){
+
+		if(pat != NULL)
+			cudaErrchk(cudaMemcpy(__myslice_device, pat, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+
+		cudaErrchk(cudaBindTexture(NULL, __tex_01, __myslice_device, det_x*det_y*sizeof(float)));
+
+		// calc polar-coordinate pattern
+		polar_transfer<<<blocks, threads>>>(__slice_AC_device, partition);
+
+		// transfer polar_device to cufftComplex
+		cu_Real2Complex<<<partition, partition>>>(__slice_AC_device, freq_device, partition*partition);
+	}
+
+	else{
+
+		if(pat != NULL)
+			cudaErrchk(cudaMemcpy(__mypattern_device, pat, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+
+		cudaErrchk(cudaBindTexture(NULL, __tex_01, __mypattern_device, det_x*det_y*sizeof(float)));
+
+		// calc polar-coordinate pattern
+		polar_transfer<<<blocks, threads>>>(__pattern_AC_device, partition);
+
+		// transfer polar_device to cufftComplex
+		cu_Real2Complex<<<partition, partition>>>(__pattern_AC_device, freq_device, partition*partition);
+	}
+
 
 	// cufft handler has been initiated by gpu_var_init()
 	// run fft
@@ -740,17 +824,66 @@ void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, 
 	// run ifft and get angular correlation
 	cufftErrchk(cufftExecC2C(__cufft_plan_1d, freq_device, freq_device, CUFFT_INVERSE));
 
-	// norm
-	cu_complex_r<<<partition, partition>>>(freq_device, polar_device, partition*partition);
 
-	// memcpy
-	cudaErrchk(cudaMemcpy(result, polar_device, partition*partition*sizeof(cufftReal), cudaMemcpyDeviceToHost));
+	if(inputType){
+		// norm
+		cu_complex_r<<<partition, partition>>>(freq_device, __slice_AC_device, partition*partition);
+		// return result
+		if(result != NULL)
+			cudaErrchk(cudaMemcpy(result, __slice_AC_device, partition*partition*sizeof(float), cudaMemcpyDeviceToHost));
+	}
+
+	else{
+		// norm
+		cu_complex_r<<<partition, partition>>>(freq_device, __pattern_AC_device, partition*partition);
+		// return result
+		if(result != NULL)
+			cudaErrchk(cudaMemcpy(result, __pattern_AC_device, partition*partition*sizeof(float), cudaMemcpyDeviceToHost));
+	}
+
 
 	// destroy
 	cudaUnbindTexture(__tex_01);
-	cudaFree(pat_device);
-	cudaFree(polar_device);
+	//cudaFree(pat_device);
+	//cudaFree(polar_device);
 	cudaFree(freq_device);
+}
+
+
+
+float comp_angcorr(int partition, float *model_slice_ac, float *pattern_ac, int BlockSize)
+{
+	gpuInitchk();
+
+	if(model_slice_ac != NULL)
+		cudaErrchk(cudaMemcpy(__slice_AC_device, model_slice_ac, partition*partition*sizeof(float), cudaMemcpyHostToDevice));
+	if(pattern_ac != NULL)
+		cudaErrchk(cudaMemcpy(__pattern_AC_device, pattern_ac, partition*partition*sizeof(float), cudaMemcpyHostToDevice));
+
+	// bind texture on __slice_AC_device & __pattern_AC_device
+	cudaErrchk(cudaBindTexture(NULL, __tex_01, __slice_AC_device, partition*partition*sizeof(float)));
+	cudaErrchk(cudaBindTexture(NULL, __tex_02, __pattern_AC_device, partition*partition*sizeof(float)));
+
+	// reduced array length
+	int array_length = (partition*partition+__ThreadPerBlock-1)/__ThreadPerBlock;
+
+	// calc, __mapped_array_device_2 and __mapped_array_host_2 is initiated in gpu_var_init()
+	angcorr_diff<<<array_length, __ThreadPerBlock>>> (__mapped_array_device_2, partition*partition);
+	cudaErrchk(cudaThreadSynchronize());
+
+	// reduce
+	float c = 0;
+	int i;
+	for(i=0; i<array_length; i++){
+		c += __mapped_array_host_2[i];
+	}
+	c = c/(partition*partition);
+
+	// unbind texture
+	cudaUnbindTexture(__tex_01);
+	cudaUnbindTexture(__tex_02);
+
+	return c;
 }
 
 
@@ -765,7 +898,8 @@ void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, 
 /*********************************************/
 
 
-// Block is 1d and size must be 256 !!!
+// Block is 1d and size must be __ThreadPerBlock !!!
+// Grid is also 1d and size must be (det_x*det_y+__ThreadPerBlock-1)/__ThreadPerBlock !!!
 // __tex_01 is slice from __model_1_gpu and __tex_02 is input pattern
 // __tex_mask is mask
 // return array (reduced_array) length is blockDim.x
