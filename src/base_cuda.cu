@@ -13,7 +13,11 @@ extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int num_
 
 extern "C" void download_model2_from_gpu(float *model_2, int vol_size);
 
+extern "C" void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y);
+
 extern "C" void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y);
+
+extern "C" void memcpy_device_slice_buf(float *myslice, int det_x, int det_y);
 
 extern "C" void free_cuda_all();
 
@@ -38,6 +42,10 @@ extern "C" float comp_angcorr(int partition, float *model_slice_ac, float *patte
 /*       likelihood        */
 
 extern "C" void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood);
+
+extern "C" void maximization_dot(float *pattern, float prob, int det_x, int det_y, float *new_slice, int BlockSize);
+
+extern "C" void maximization_norm(float scaling_factor, int det_x, int det_y, int BlockSize);
 
 
 
@@ -153,11 +161,27 @@ void download_model2_from_gpu(float *new_model_2, int vol_size)
 }
 
 
+void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y)
+{
+	cudaErrchk(cudaMemcpy(new_slice, __myslice_device, det_x*det_y*sizeof(float), cudaMemcpyDeviceToHost));
+}
+
+
 void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y)
 {
 	cudaErrchk(cudaMemcpy(__mypattern_device, pattern, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
 }
 
+
+void memcpy_device_slice_buf(float *myslice, int det_x, int det_y)
+{
+	if(myslice != NULL){
+		cudaErrchk(cudaMemcpy(__myslice_device, myslice, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+	}
+	else{
+		cudaErrchk(cudaMemset(__myslice_device, 0, det_x*det_y*sizeof(float)));
+	}
+}
 
 
 void free_cuda_all()
@@ -420,7 +444,7 @@ void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int 
 
 
 
-// anyone who is interested can also optimized it using shared memory
+// anyone who is interested can also optimize it by using shared memory
 // I didn't try that cuz its really complex to arrange such a large volume array
 // ...
 // ok ... cuz I'm lazy ...
@@ -747,8 +771,7 @@ __global__ void angcorr_diff(float *reduced_array, int N)
 	w = tex1Dfetch(__tex_01, global_offset);
 	k = tex1Dfetch(__tex_02, global_offset);
 
-	cache[shared_offset] = abs(w - k)/k;
-	//printf("%f, %f\n", w, k);
+	cache[shared_offset] = abs(w - k);
 
 	__syncthreads();
 
@@ -844,8 +867,6 @@ void do_angcorr(int partition, float* pat, float *result, int det_x, int det_y, 
 
 	// destroy
 	cudaUnbindTexture(__tex_01);
-	//cudaFree(pat_device);
-	//cudaFree(polar_device);
 	cudaFree(freq_device);
 }
 
@@ -921,8 +942,14 @@ __global__ void possion_likelihood(float beta, float *reduced_array)
 	w = tex1Dfetch(__tex_01, global_offset);
 	k = tex1Dfetch(__tex_02, global_offset);
 
-	s = beta/(__pats_gpu[0]*__pats_gpu[1] - (__num_mask_ron_gpu[0]+__num_mask_ron_gpu[1]));
-	cache[shared_offset] = (k*__logf(w)-w)*s;
+	if(w<=0){
+		cache[shared_offset] = 0;
+	}
+	else{
+		s = beta/(__pats_gpu[0]*__pats_gpu[1] - (__num_mask_ron_gpu[0]+__num_mask_ron_gpu[1]));
+		cache[shared_offset] = (k*__logf(w)-w)*s;
+	}
+
 	__syncthreads();
 
 	// reduce
@@ -935,8 +962,9 @@ __global__ void possion_likelihood(float beta, float *reduced_array)
 		x /= 2;
 	}
 
-	if(shared_offset == 0)
+	if(shared_offset == 0){
 		reduced_array[blockIdx.x] = cache[0];
+	}
 
 }
 
@@ -967,10 +995,100 @@ void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, 
 	for(i=0; i<array_length; i++){
 		c += __mapped_array_host[i];
 	}
-	*likelihood = c;
+	*likelihood = expf(c);
 
 	// unbind texture
 	cudaUnbindTexture(__tex_01);
 	cudaUnbindTexture(__tex_02);
+
+}
+
+
+
+// __tex_mask should be initiated in advance
+// __tex_01 (__mypattern_device) should be initiated if add == 1
+__global__ void pat_dot_float(float number, float *new_slice, int add)
+{
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+	float k;
+
+	x = tex1Dfetch(__tex_mask, offset);
+	if(offset >= __pats_gpu[0]*__pats_gpu[1] || x > 1) return;
+
+	if(add){
+		k = tex1Dfetch(__tex_01, offset);
+		new_slice[offset] += k * number;
+	}
+	else{
+		new_slice[offset] *= number;
+	}
+
+}
+
+
+
+// maximization procedure should be such a loop :
+// {
+// 	for r in all_rotation :
+//     	memcpy_device_slice_buf (NULL, det_x, det_y)
+//      scaling_d = 0
+//     	for d in all_data :
+//         	p = all_probs[r, d]
+//         	maximization_dot (d, p, det_x, det_y, NULL, blocksize)
+//			scaling_d += p
+//		end
+//		maximization_norm (scaling_d, det_x, det_y, blocksize)
+//		merge_slice (r, NULL, blocksize, det_x, det_y)
+//	end
+//	merge_scaling (gridsize, blocksize)
+//	download_model2_from_gpu (NEW_MODEL, vol_size)
+// }
+// more : NEW_MODEL is the returned model
+
+
+// DO NOT FORGET to initiate __myslice_device to 0 in advance !!!
+void maximization_dot(float *pattern, float prob, int det_x, int det_y, float *new_slice, int BlockSize)
+{
+	gpuInitchk();
+
+	// device memory
+	if(pattern != NULL)
+		cudaErrchk(cudaMemcpy(__mypattern_device, pattern, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
+
+	cudaErrchk(cudaBindTexture(NULL, __tex_01, __mypattern_device, det_x*det_y*sizeof(float)));
+
+	// dim
+	dim3 threads( BlockSize, BlockSize );
+	dim3 blocks( (det_x+BlockSize-1)/BlockSize, (det_y+BlockSize-1)/BlockSize );
+
+	// calc
+	pat_dot_float<<<blocks, threads>>>(prob, __myslice_device, 1);
+
+	// unbind texture
+	cudaUnbindTexture(__tex_01);
+
+	// copy back ?
+	if(new_slice != NULL)
+		download_currSlice_from_gpu(new_slice, det_x, det_y);
+
+}
+
+
+// This function should be called after miximization_dot
+void maximization_norm(float scaling_factor, int det_x, int det_y, int BlockSize)
+{
+	gpuInitchk();
+
+	// device memory
+	// we cannot bind texture to __myslice_device, cuz texture memory is read-only
+
+	// dim
+	dim3 threads( BlockSize, BlockSize );
+	dim3 blocks( (det_x+BlockSize-1)/BlockSize, (det_y+BlockSize-1)/BlockSize );
+
+	// calc
+	pat_dot_float<<<blocks, threads>>>(scaling_factor, __myslice_device, 0);
 
 }

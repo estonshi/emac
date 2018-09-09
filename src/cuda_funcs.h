@@ -11,7 +11,11 @@ extern void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask
 
 extern void download_model2_from_gpu(float *model_2, int vol_size);
 
+extern void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y);
+
 extern void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y);
+
+extern void memcpy_device_slice_buf(float *myslice, int det_x, int det_y);
 
 extern void free_cuda_all();
 
@@ -39,6 +43,10 @@ extern float comp_angcorr(int partition, float *model_slice_ac, float *pattern_a
 /*       likelihood        */
 
 extern void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood);
+
+extern void maximization_dot(float *pattern, float prob, int det_x, int det_y, float *new_slice, int BlockSize);
+
+extern void maximization_norm(float scaling_factor, int det_x, int det_y, int BlockSize);
 
 
 #endif

@@ -84,9 +84,9 @@ int main(int argc, char** argv){
 
 	load_emac_prop(pat_fn, &__num_data, &__det_x, &__det_y);
 	float mean_count = load_emac_dataset(pat_fn, dataset);
+	printf("%f\n", mean_count);
 
 	pattern = (float*) calloc((int)__det_x*__det_y, sizeof(float*));
-	mean_count = parse_pattern(dataset, __det_x*__det_y, true, pattern);
 
 
 	// other init
@@ -178,58 +178,119 @@ int main(int argc, char** argv){
 	// init gpu var
 	gpu_var_init((int)__det_x, (int)__det_y, center, __num_mask_ron, (int)__qmax_len, 20, 
 									det, mask, mymodel, model_2, merge_w, 256);
-	// init pattern buffer
-	memcpy_device_pattern_buf(pattern, __det_x, __det_y);
 
+
+	float tmp[4], prob_tmp = 0, total_p = 0;
+	myslice = (float*) malloc(pat_s[0]*pat_s[1]*sizeof(float));
+	P_jk = (float*) malloc(10*num_quat*sizeof(float));
+
+
+	/*    likelihood    */
 
 	// test performance
 	cuda_start_event();
 
-	float tmp[4], tmp_mean_count = 0, total_p = 0;
-	myslice = (float*) malloc(pat_s[0]*pat_s[1]*sizeof(float));
-	P_jk = (float*) malloc(num_quat*sizeof(float));
+	emac_pat *thisp = dataset;
 
-	for(i=0; i<num_quat; i++)
+	for(j=0; j<10; j++)
 	{
+		mean_count = parse_pattern(thisp, pat_s[0]*pat_s[1], true, pattern);
+		// init pattern buffer
+		memcpy_device_pattern_buf(pattern, pat_s[0], pat_s[1]);
+		total_p = 0;
 
-		tmp[0] = quater[i*4];
-		tmp[1] = quater[i*4+1];
-		tmp[2] = quater[i*4+2];
-		tmp[3] = quater[i*4+3];
+		for(i=0; i<num_quat; i++)
+		{
 
-		// slicing from model_1
-		get_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1], 1);
+			tmp[0] = quater[i*4];
+			tmp[1] = quater[i*4+1];
+			tmp[2] = quater[i*4+2];
+			tmp[3] = quater[i*4+3];
 
-		
-		/*
-		// calc mean count of slice
-		for(j=0; j<__det_x*__det_y; j++){
-			tmp_mean_count += myslice[j];
+			// slicing from model_1
+			get_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1], 1);
+
+			
+			/*
+			// calc mean count of slice
+			for(j=0; j<__det_x*__det_y; j++){
+				tmp_mean_count += myslice[j];
+			}
+			for(j=0; j<__det_x*__det_y; j++){
+				myslice[j] *= (mean_count/tmp_mean_count);
+			}
+			*/// No need to do scaling here
+			// scaling is done to __model_2 at the end of each iteration
+
+
+			// calculate likelihood
+			calc_likelihood(__beta, NULL, NULL, pat_s[0], pat_s[1], &P_jk[i + j*num_quat]);
+			total_p += P_jk[i + j*num_quat];
+
 		}
-		for(j=0; j<__det_x*__det_y; j++){
-			myslice[j] *= (mean_count/tmp_mean_count);
+
+		for(i=0; i<num_quat; i++){
+			P_jk[i + j*num_quat] /= total_p;
 		}
-		*/// No need to do scaling here
-		// scaling is done to __model_2 at the end of each iteration
 
-
-		// calculate likelihood
-		calc_likelihood(__beta, NULL, NULL, pat_s[0], pat_s[1], &P_jk[i]);
-		total_p += P_jk[i];
-	}
-
-	for(i=0; i<num_quat; i++){
-		P_jk[i] /= total_p;
+		thisp = thisp->next;
 	}
 
 	// test performance
 	float estime = cuda_return_time();
-	printf("use %.5f ms for slicing %d pattern(s) & calculate likelihood\n", estime, num_quat);
+	printf("use %.5f ms for evaluating probs of %d pattern(s) in %d orientations.\n", estime, 10, num_quat);
 
 	// write
 	fp = fopen("./output/tst_likelihood.bin", "wb");
-	fwrite(P_jk, sizeof(float), num_quat, fp);
+	fwrite(P_jk, sizeof(float), 10*num_quat, fp);
 	fclose(fp);
+
+
+	/*    maximization    */
+
+	// test performance
+	cuda_start_event();
+
+	thisp = dataset;
+
+	for(i=0; i<num_quat; i++){
+
+		memcpy_device_slice_buf(NULL, pat_s[0], pat_s[1]);
+		tmp[0] = quater[i*4];
+		tmp[1] = quater[i*4+1];
+		tmp[2] = quater[i*4+2];
+		tmp[3] = quater[i*4+3];
+		total_p = 0;
+
+		for(j=0; j<10; j++){
+
+			mean_count = parse_pattern(thisp, pat_s[0]*pat_s[1], true, pattern);
+			prob_tmp = P_jk[i + j*num_quat];
+			maximization_dot(pattern, prob_tmp, pat_s[0], pat_s[1], NULL, BlockSize);
+			total_p += prob_tmp;
+
+		}
+
+		maximization_norm(1.0/total_p, pat_s[0], pat_s[1], BlockSize);
+		merge_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1]);
+
+	}
+
+	merge_scaling(BlockSize, BlockSize);
+
+	download_model2_from_gpu(model_2, (int)__qmax_len);
+
+	// write
+	fp = fopen("./output/tst_new_model.bin", "wb");
+	fwrite(model_2, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);
+	fclose(fp);
+
+
+	// test performance
+	estime = cuda_return_time();
+	printf("use %.5f ms for maximization & merge %d new slice(s).\n", estime, 10, num_quat);
+
+
 
 
 	// free & free cuda
@@ -244,7 +305,7 @@ int main(int argc, char** argv){
 	free(pattern);
 	free(P_jk);
 
-	emac_pat *thisp = dataset;
+	thisp = dataset;
 	emac_pat *nextp;
 	while(thisp != NULL){
 		nextp = thisp->next;
