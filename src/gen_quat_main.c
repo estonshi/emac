@@ -29,7 +29,6 @@ int main(int argc, char** argv){
 				break;
 			case 'h':
 				printf("\nThis function is used to generate uniformly distributed orientations.");
-				printf("\nUsage :   ./gen_quat ");
 				printf("\nOptions : ");
 				printf("\n          -n [number_level] ");
 				printf("\n          -s [save file] ");

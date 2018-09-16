@@ -64,6 +64,7 @@ int main(int argc, char** argv){
 				__stoprad = atoi(optarg);
 				break;
 			case 'h':
+				printf("\nThis function is used to test angular correlation calculation\n");
 				printf("options:\n");
 				printf("         -f [signal file]\n");
 				printf("         -m [mask file]\n");

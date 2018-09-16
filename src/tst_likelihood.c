@@ -8,6 +8,7 @@ uint32 __det_x, __det_y;
 uint32 __num_data;
 int __num_mask_ron[2];
 float __beta;
+float __PROB_MIN;
 
 
 int main(int argc, char** argv){
@@ -59,6 +60,7 @@ int main(int argc, char** argv){
 				strcpy(pat_fn, optarg);
 				break;
 			case 'h':
+				printf("\nThis function is used to test likelihood calculation & maximization\n");
 				printf("options:\n");
 				printf("         -f [signal file]\n");
 				printf("         -d [detector file]\n");
@@ -84,10 +86,10 @@ int main(int argc, char** argv){
 
 	load_emac_prop(pat_fn, &__num_data, &__det_x, &__det_y);
 	float mean_count = load_emac_dataset(pat_fn, dataset);
-	printf("%f\n", mean_count);
 
 	pattern = (float*) calloc((int)__det_x*__det_y, sizeof(float*));
 
+	__PROB_MIN = 1.0 / num_quat;
 
 	// other init
 
@@ -224,7 +226,7 @@ int main(int argc, char** argv){
 
 
 			// calculate likelihood
-			calc_likelihood(__beta, NULL, NULL, pat_s[0], pat_s[1], &P_jk[i + j*num_quat]);
+			P_jk[i + j*num_quat] = calc_likelihood(__beta, NULL, NULL, pat_s[0], pat_s[1]);
 			total_p += P_jk[i + j*num_quat];
 
 		}
@@ -251,10 +253,9 @@ int main(int argc, char** argv){
 	// test performance
 	cuda_start_event();
 
-	thisp = dataset;
-
 	for(i=0; i<num_quat; i++){
 
+		thisp = dataset;
 		memcpy_device_slice_buf(NULL, pat_s[0], pat_s[1]);
 		tmp[0] = quater[i*4];
 		tmp[1] = quater[i*4+1];
@@ -264,19 +265,25 @@ int main(int argc, char** argv){
 
 		for(j=0; j<10; j++){
 
-			mean_count = parse_pattern(thisp, pat_s[0]*pat_s[1], true, pattern);
 			prob_tmp = P_jk[i + j*num_quat];
+			if(prob_tmp < __PROB_MIN) continue;
+
+			mean_count = parse_pattern(thisp, pat_s[0]*pat_s[1], true, pattern);
 			maximization_dot(pattern, prob_tmp, pat_s[0], pat_s[1], NULL, BlockSize);
+
 			total_p += prob_tmp;
+			thisp = thisp->next;
 
 		}
 
-		maximization_norm(1.0/total_p, pat_s[0], pat_s[1], BlockSize);
-		merge_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1]);
+		if(total_p > 0){
+			maximization_norm(1.0/total_p, pat_s[0], pat_s[1], BlockSize);
+			merge_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1]);
+		}
 
 	}
 
-	merge_scaling(BlockSize, BlockSize);
+	merge_scaling(BlockSize, BlockSize, 1);
 
 	download_model2_from_gpu(model_2, (int)__qmax_len);
 

@@ -41,10 +41,10 @@ bool load_det_info(char* det_file, int* mask, float* det){
 
 
 // iter_num start from 1 !!!!
-void write_log(uint32 iter_num, float used_time, float rms_change, float beta, uint32 num_rot, float pat_rot){
+void write_log(uint32 iter_num, float used_time, float rms_change, float beta, uint32 num_rot, float KL_entropy){
 	FILE* fp;
 	fp = fopen(__log_file, "a");
-	fprintf(fp, "%-10u %-12.2f %-12.3f %-12.3f %-12u %-10.3f\n", iter_num, used_time, rms_change, pat_rot, num_rot, beta);
+	fprintf(fp, "%-10u %-12.2f %-12.3e %-12.3e %-12u %-10.3f\n", iter_num, used_time, rms_change, KL_entropy, num_rot, beta);
 	fclose(fp);
 }
 
@@ -70,7 +70,7 @@ float read_log(char* read_item, int iter_num){
 	if( strcmp(read_item, "iter_num") == 0 ) index = 0;
 	else if( strcmp(read_item, "used_time") == 0 ) index = 1;
 	else if( strcmp(read_item, "rms_change") == 0 ) index = 2;
-	else if( strcmp(read_item, "pat_rot") == 0 ) index = 3;
+	else if( strcmp(read_item, "KL_divg") == 0 ) index = 3;
 	else if( strcmp(read_item, "beta") == 0 ) index = 5;
 	else{
 		printf("[ERROR] Log file doesn't have information about '%s'. Return -1.\n", read_item);
@@ -184,8 +184,8 @@ bool setup(char* config_file, bool resume){
 		}
 		else if (strcmp(token, "center") == 0){
 			token = strtok(NULL, " = ");
-			__center_x = atof(strtok(token, " ,\n"));
-			__center_y = atof(strtok(NULL, " ,\n"));
+			__center_p[0] = atof(strtok(token, " ,\n"));
+			__center_p[1] = atof(strtok(NULL, " ,\n"));
 		}
 		// [adjust]
 		else if (strcmp(token, "scaling") == 0){
@@ -194,6 +194,9 @@ bool setup(char* config_file, bool resume){
 				__scale = true;
 			else
 				__scale = false;
+		}
+		else if (strcmp(token, "ron") == 0){
+			__ron = (uint32)atoi(strtok(NULL, " = \n"));
 		}
 		// [recon]
 		else if (strcmp(token, "init_model") == 0){
@@ -206,6 +209,13 @@ bool setup(char* config_file, bool resume){
 			__beta = atof(strtok(token, " ,\n"));
 			__beta_jump = atoi(strtok(NULL, " ,\n"));
 			__beta_mul = atof(strtok(NULL, " ,\n"));
+		}
+		else if (strcmp(token, "ang_corr_grid") == 0){
+			token = strtok(token, " = \n");
+			if( strcmp(token, "None") == 0 || strcmp(token, "none") == 0 || strcmp(token, "NONE") == 0 )
+				__ang_corr_grid = 0;
+			else
+				__ang_corr_grid = (uint32)atoi(token);
 		}
 		// [output]
 		else if (strcmp(token, "det_q") == 0)
@@ -275,6 +285,9 @@ bool setup(char* config_file, bool resume){
 
 	}
 
+	// initiate __P_jk
+	__P_jk = (float*) malloc(__num_data*__quat_num*sizeof(float));
+
 
 	if( !resume ){
 
@@ -282,7 +295,7 @@ bool setup(char* config_file, bool resume){
 		__iter_now = 1;
 
 		// mkdir
-		sprintf(line, "%s/scaling", __output_dir);
+		sprintf(line, "%s/info", __output_dir);
 		mkdir(line, 0750);
 		sprintf(line, "%s/probs", __output_dir);
 		mkdir(line, 0750);
@@ -291,7 +304,7 @@ bool setup(char* config_file, bool resume){
 
 		// write initial information
 		// write scaling
-		sprintf(line, "%s/scaling/init.txt", __output_dir);
+		sprintf(line, "%s/info/scaling_init.txt", __output_dir);
 		if(__scale){
 			fp = fopen(line, "w");
 			emac_pat* thisp = __dataset;
@@ -302,7 +315,7 @@ bool setup(char* config_file, bool resume){
 			fclose(fp);
 		}
 		// write model
-		sprintf(line, "%s/model/init.bin", __output_dir);
+		sprintf(line, "%s/model/model_000.bin", __output_dir);
 		fp = fopen(line, "wb");
 		fwrite(__model_1, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);
 		fclose(fp);
@@ -323,7 +336,7 @@ bool setup(char* config_file, bool resume){
 		else
 			fprintf(fp, "Initial model         :   random\n");
 		fprintf(fp, "\n[Iterations]\n");
-		fprintf(fp, "%-10s %-12s %-12s %-12s %-12s %-10s\n", "iter_num", "used_time", "rms_change", "pat_rot", "num_rot", "beta");
+		fprintf(fp, "%-10s %-12s %-12s %-12s %-12s %-10s\n", "iter_num", "used_time", "rms_change", "KL_divg", "num_rot", "beta");
 		fclose(fp);
 
 		printf("Log file is                   : %s\n", __log_file);
@@ -339,7 +352,7 @@ bool setup(char* config_file, bool resume){
 		float temp;
 		temp = read_log("iter_num",-1);
 		if(temp <= 0) return false;
-		else __iter_now = (uint32)temp + 1;
+		else __iter_now = (uint32)(temp+0.1) + 1;
 		printf("Resume from iteration         : %u\n", __iter_now);
 
 		// model
@@ -386,6 +399,8 @@ void free_all(){
 	free(__quat);
 	// free mask
 	free(__mask);
+	// free __P_jk
+	free(__P_jk);
 	// free dataset
 	emac_pat *thisp = __dataset;
 	emac_pat *nextp;
@@ -397,7 +412,7 @@ void free_all(){
 }
 
 
-
+/*
 int main(int argc, char** argv){
 	char config_file[999];
 
@@ -443,3 +458,4 @@ int main(int argc, char** argv){
 	free_all();
 }
 
+*/

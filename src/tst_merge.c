@@ -55,6 +55,7 @@ int main(int argc, char** argv){
 				num_quat = atoi(optarg);
 				break;
 			case 'h':
+				printf("\nThis function is used to test slicing & merging\n");
 				printf("options:\n");
 				printf("         -f [signal file]\n");
 				printf("         -d [detector file]\n");
@@ -189,7 +190,7 @@ int main(int argc, char** argv){
 	}
 
 	// scaling
-	merge_scaling(BlockSize, BlockSize);
+	merge_scaling(BlockSize, BlockSize, 1);
 
 	// test performance
 	float estime = cuda_return_time();

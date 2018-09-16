@@ -16,12 +16,14 @@ int main(int argc, char** argv){
 				break;
 			case 'h':
 				printf("\nThis program is used to test dataset parser.");
-				printf("\nUsage : ./emac_data -i [input emac file] -o [output binary data file]\n\n");
+				printf("\noptions :");
+				printf("\n         -i [input emacdata file]");
+				printf("\n         -o [output file]\n");
 				return 0;
 				break;
 			default:
 				printf("\nThis program is used to test dataset parser.");
-				printf("\nUsage : ./emac_data -i [input emac file] -o [output binary data file]\n\n");
+				printf("\nUsage : ./emac_data -i [input emac file] -o [output binary data file]\n");
 				return 0;
 				break;
 		}

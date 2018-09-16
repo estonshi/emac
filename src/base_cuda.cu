@@ -11,6 +11,8 @@ extern "C" void setDevice(int gpu_id);
 extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
+extern "C" void upload_models_to_gpu(float *model_1, float *model_2, int vol_size);
+
 extern "C" void download_model2_from_gpu(float *model_2, int vol_size);
 
 extern "C" void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y);
@@ -31,7 +33,7 @@ extern "C" void get_slice(float *quaternion, float *myslice, int BlockSize, int 
 
 extern "C" void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
 
-extern "C" void merge_scaling(int GridSize, int BlockSize);
+extern "C" void merge_scaling(int GridSize, int BlockSize, float scal_factor);
 
 /*   angular correlation   */
 
@@ -41,7 +43,7 @@ extern "C" float comp_angcorr(int partition, float *model_slice_ac, float *patte
 
 /*       likelihood        */
 
-extern "C" void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood);
+extern "C" float calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y);
 
 extern "C" void maximization_dot(float *pattern, float prob, int det_x, int det_y, float *new_slice, int BlockSize);
 
@@ -152,6 +154,31 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2]
 	__initiated = 1;
 }
 
+
+void upload_models_to_gpu(float *model_1, float *model_2, int vol_size)
+{
+	// model 1
+	cudaUnbindTexture(__tex_model);
+	cudaExtent volExt = make_cudaExtent(vol_size, vol_size, vol_size);
+
+	cudaMemcpy3DParms volParms = {0};
+	volParms.srcPtr = make_cudaPitchedPtr((void*)model_1, sizeof(float)*vol_size, (int)vol_size, (int)vol_size);
+	volParms.dstArray = __model_1_gpu;
+	volParms.extent = volExt;
+	volParms.kind = cudaMemcpyHostToDevice;
+
+	cudaErrchk(cudaMemcpy3D(&volParms));
+	cudaErrchk(cudaBindTextureToArray(__tex_model, __model_1_gpu));
+
+
+	// model 2
+	if(model_2 != NULL){
+		cudaErrchk(cudaMemcpy(__model_2_gpu, model_2, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice));
+	}
+	else{
+		cudaErrchk(cudaMemset(__model_2_gpu, 0, vol_size*vol_size*vol_size*sizeof(float)));
+	}
+}
 
 
 void download_model2_from_gpu(float *new_model_2, int vol_size)
@@ -580,7 +607,7 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, float *new_
 // this function really fucks up. 8 ms to finish on K80 !
 // but do we really need to optimize it ?
 // it ONLY runs one time at the end of each reconstruction iteration.
-__global__ void merging_sc(float *new_model, float *merge_w)
+__global__ void merging_sc(float *new_model, float *merge_w, float scal_factor)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -588,7 +615,7 @@ __global__ void merging_sc(float *new_model, float *merge_w)
 
 	while(offset < __vol_len_gpu[0]*__vol_len_gpu[0]*__vol_len_gpu[0]){
 		
-		new_model[offset] = new_model[offset] / merge_w[offset];
+		new_model[offset] = new_model[offset] / merge_w[offset] * scal_factor;
 
 		offset += blockDim.x * gridDim.x * blockDim.y * gridDim.y;
 	}
@@ -622,17 +649,20 @@ void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, in
 
 
 
-void merge_scaling(int GridSize, int BlockSize)
+void merge_scaling(int GridSize, int BlockSize, float scal_factor)
 {
 
 	gpuInitchk();
+
+	// check scale factor
+	if(scal_factor <= 0) scal_factor = 1;
 
 	// dim
 	dim3 threads( BlockSize, BlockSize );
 	dim3 blocks( GridSize, GridSize );
 
 	// scaling
-	merging_sc<<<blocks, threads>>>(__model_2_gpu, __w_gpu);
+	merging_sc<<<blocks, threads>>>(__model_2_gpu, __w_gpu, scal_factor);
 
 }
 
@@ -970,7 +1000,7 @@ __global__ void possion_likelihood(float beta, float *reduced_array)
 
 
 // returned "likelihood" is a pointer to a float number
-void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood)
+float calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y)
 {
 	gpuInitchk();
 
@@ -995,11 +1025,13 @@ void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, 
 	for(i=0; i<array_length; i++){
 		c += __mapped_array_host[i];
 	}
-	*likelihood = expf(c);
+	c = expf(c);
 
 	// unbind texture
 	cudaUnbindTexture(__tex_01);
 	cudaUnbindTexture(__tex_02);
+
+	return c;
 
 }
 

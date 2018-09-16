@@ -9,6 +9,8 @@ extern void setDevice(int gpu_id);
 extern void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
 	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
+extern void upload_models_to_gpu(float *model_1, float *model_2, int vol_size);
+
 extern void download_model2_from_gpu(float *model_2, int vol_size);
 
 extern void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y);
@@ -30,7 +32,7 @@ extern void get_slice(float *quaternion, float *myslice, int BlockSize, int det_
 
 extern void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
 
-extern void merge_scaling(int GridSize, int BlockSize); 
+extern void merge_scaling(int GridSize, int BlockSize, float scal_factor); 
 
 
 /*   angular correlation   */
@@ -42,7 +44,7 @@ extern float comp_angcorr(int partition, float *model_slice_ac, float *pattern_a
 
 /*       likelihood        */
 
-extern void calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y, float *likelihood);
+extern float calc_likelihood(float beta, float *model_slice, float *pattern, int det_x, int det_y);
 
 extern void maximization_dot(float *pattern, float prob, int det_x, int det_y, float *new_slice, int BlockSize);
 
