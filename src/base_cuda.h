@@ -15,6 +15,7 @@ float *__w_gpu;
 cudaArray *__model_1_gpu;
 float *__model_2_gpu;
 cufftHandle __cufft_plan_1d;
+float *__quaternion;
 
 // global device buffer memory
 float *__myslice_device;
@@ -32,11 +33,12 @@ texture<float> __tex_01;
 texture<float> __tex_02;
 texture<int> __tex_mask;
 texture<float, cudaTextureType3D, cudaReadModeElementType> __tex_model;
+texture<float> __tex_quat;
 
 // constant arrays
 __constant__ int __pats_gpu[2];
 __constant__ float __center_gpu[2];
-__constant__ float __rotm_gpu[9];
+//__constant__ float __rotm_gpu[9];
 __constant__ int __vol_len_gpu[1];
 __constant__ int __stoprad_gpu[1];
 __constant__ int __num_mask_ron_gpu[2];

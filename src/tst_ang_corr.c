@@ -187,7 +187,7 @@ int main(int argc, char** argv){
 
 	// init gpu var
 	gpu_var_init((int)__det_x, (int)__det_y, center, num_mask_ron, __qmax_len, (int)__stoprad, 
-										det, mask, mymodel, model_2, merge_w, bins);
+							num_quat, quater, det, mask, mymodel, model_2, merge_w, bins);
 
 
 
@@ -202,14 +202,8 @@ int main(int argc, char** argv){
 
 	for(i=0;i<num_quat;i++){
 
-		// quaternion
-		tmp[0] = quater[i*4];
-		tmp[1] = quater[i*4+1];
-		tmp[2] = quater[i*4+2];
-		tmp[3] = quater[i*4+3];
-
 		// slicing from model_1, save in GPU buffer
-		get_slice(tmp, NULL, Blocksize, pat_s[0], pat_s[1], 1);
+		get_slice(i, NULL, Blocksize, pat_s[0], pat_s[1], 1);
 
 		// calculate model slice ac map, save in GPU buffer
 		do_angcorr(bins, NULL, NULL, pat_s[0], pat_s[1], Blocksize, true);

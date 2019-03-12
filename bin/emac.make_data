@@ -21,7 +21,7 @@ if __name__ == '__main__':
 	if not (ori_data.dtype == np.dtype('int64') or ori_data.dtype == np.dtype('int32')):
 		raise ValueError("The data type of input file is incorrect. It should be 'int64' or 'int32'")
 
-	print("\nCompressing data ..")
+	print("\nDecompressing data ..")
 	num_data, size_x, size_y = ori_data.shape
 
 	if args.selection == "even":

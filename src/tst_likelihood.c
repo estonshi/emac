@@ -179,10 +179,10 @@ int main(int argc, char** argv){
 
 	// init gpu var
 	gpu_var_init((int)__det_x, (int)__det_y, center, __num_mask_ron, (int)__qmax_len, 20, 
-									det, mask, mymodel, model_2, merge_w, 256);
+							num_quat, quater, det, mask, mymodel, model_2, merge_w, 256);
 
 
-	float tmp[4], prob_tmp = 0, total_p = 0;
+	float prob_tmp = 0, total_p = 0;
 	myslice = (float*) malloc(pat_s[0]*pat_s[1]*sizeof(float));
 	P_jk = (float*) malloc(10*num_quat*sizeof(float));
 
@@ -204,13 +204,8 @@ int main(int argc, char** argv){
 		for(i=0; i<num_quat; i++)
 		{
 
-			tmp[0] = quater[i*4];
-			tmp[1] = quater[i*4+1];
-			tmp[2] = quater[i*4+2];
-			tmp[3] = quater[i*4+3];
-
 			// slicing from model_1
-			get_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1], 1);
+			get_slice(i, NULL, BlockSize, pat_s[0], pat_s[1], 1);
 
 			
 			/*
@@ -257,10 +252,6 @@ int main(int argc, char** argv){
 
 		thisp = dataset;
 		memcpy_device_slice_buf(NULL, pat_s[0], pat_s[1]);
-		tmp[0] = quater[i*4];
-		tmp[1] = quater[i*4+1];
-		tmp[2] = quater[i*4+2];
-		tmp[3] = quater[i*4+3];
 		total_p = 0;
 
 		for(j=0; j<10; j++){
@@ -278,7 +269,7 @@ int main(int argc, char** argv){
 
 		if(total_p > 0){
 			maximization_norm(1.0/total_p, pat_s[0], pat_s[1], BlockSize);
-			merge_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1]);
+			merge_slice(i, NULL, BlockSize, pat_s[0], pat_s[1]);
 		}
 
 	}

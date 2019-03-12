@@ -59,11 +59,11 @@ if __name__ == '__main__':
 		datamask[np.where(usermask >= 1)] = 2
 
 	# calculate q info
-	q_value = q.cal_q_pat(detd, lamb, pix_s, size, center)
 	x, y = np.indices(size)
 	x = x - center[0]
 	y = y - center[0]
 	z = np.zeros(x.shape) + detd
+	r = np.linalg.norm([x, y], axis=0)
 
 	# r_vec = np.array([x, y, z])
 	# map r_vec to ewald sphere with r=detd and get qn_vec, assume the sample is at origin
@@ -85,10 +85,9 @@ if __name__ == '__main__':
 
 	q_norm = np.linalg.norm([qx, qy, qz], axis=0)
 	q_norm[np.where(q_norm == 0)] = 1e-10
-	q_min = q.cal_q(detd, lamb, 2, pix_s)[1] * downsampl
-	qx = qx * q_value / q_norm / q_min
-	qy = qy * q_value / q_norm / q_min
-	qz = qz * q_value / q_norm / q_min
+	qx = qx * r / q_norm / downsampl
+	qy = qy * r / q_norm / downsampl
+	qz = qz * r / q_norm / downsampl
 
 	# reshape and write to file
 	qx = qx.flatten()
@@ -97,6 +96,8 @@ if __name__ == '__main__':
 	datamask = datamask.flatten()
 	det_mapper = np.vstack([qx,qy,qz,datamask]).T
 	q_norm = np.int(np.linalg.norm([qx, qy, qz], axis=0).max() + 2)
+
+	print("Radius of reciprocal space : %d" % q_norm)
 
 	np.savetxt(det_q_output, det_mapper, fmt = "%.2f %.2f %.2f %d")
 	f = open(det_q_output, 'a')

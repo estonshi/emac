@@ -44,6 +44,7 @@ int main(int argc, char** argv){
 				printf("\nMain function to start emac program");
 				printf("\nOptions:");
 				printf("\n        -c [config_file] : config file path");
+				printf("\n        -i [iteration]   : number of iterations");
 				printf("\n        -g [gpu id]      : which GPU to use, default = 0");
 				printf("\n        -b [Block Size]  : 2D block size used in GPU calculation, default = 16");
 				printf("\n        -t [num_threads] : number of parallel threads, default = NUM_CPU_CORES");
@@ -65,7 +66,11 @@ int main(int argc, char** argv){
 	// openmp
 	omp_set_num_threads(num_threads);
 
-	// host
+	// host set up
+	if(__iter_all <= 0){
+		printf("[ERROR] use [-i] option to provide number of iterations\n");
+		exit(-1);
+	}
 	succeed = setup(config_file, resume);
 	if(!succeed){
 		free_all();
@@ -82,7 +87,7 @@ int main(int argc, char** argv){
 	// GPU
 	setDevice(gpu_id);
 	gpu_var_init((int)__det_x, (int)__det_y, __center_p, __num_mask_ron, (int)__qmax_len, (int)__ron, 
-								__det, __mask, __model_1, __model_2, __merge_w, (int)__ang_corr_grid);
+				(int)__quat_num, __quat, __det, __mask, __model_1, __model_2, __merge_w, (int)__ang_corr_grid);
 
 
 	/*
@@ -94,7 +99,7 @@ int main(int argc, char** argv){
 
 		time(&loop_start);
 		thisp = __dataset;
-		printf("\n>>> Start iteration %u / %u\n", __iter_now, __iter_all);
+		printf(">>> Start iteration %u / %u\n", __iter_now, __iter_all);
 
 
 		/*   likelihood   */
@@ -111,13 +116,8 @@ int main(int argc, char** argv){
 			for(i=0; i<__quat_num; i++)
 			{
 
-				quat_tmp[0] = __quat[i*4];
-				quat_tmp[1] = __quat[i*4+1];
-				quat_tmp[2] = __quat[i*4+2];
-				quat_tmp[3] = __quat[i*4+3];
-
 				// slicing from model_1
-				get_slice(quat_tmp, NULL, BlockSize, (int)__det_x, (int)__det_y, 1);
+				get_slice(i, NULL, BlockSize, (int)__det_x, (int)__det_y, 1);
 
 				// calculate likelihood
 				__P_jk[i + j*__quat_num] = calc_likelihood(__beta, NULL, NULL, (int)__det_x, (int)__det_y);
@@ -134,6 +134,7 @@ int main(int argc, char** argv){
 			#pragma omp barrier
 
 			thisp = thisp->next;
+			printf("iter : %d \n", j);
 
 		}
 
@@ -147,10 +148,6 @@ int main(int argc, char** argv){
 		for(i=0; i<__quat_num; i++){
 
 			memcpy_device_slice_buf(NULL, (int)__det_x, (int)__det_y);
-			quat_tmp[0] = __quat[i*4];
-			quat_tmp[1] = __quat[i*4+1];
-			quat_tmp[2] = __quat[i*4+2];
-			quat_tmp[3] = __quat[i*4+3];
 			total_p = 0;
 			total_mean_count = 0;
 			thisp = __dataset;
@@ -172,7 +169,7 @@ int main(int argc, char** argv){
 			if(total_p > 0){
 				rescale_model_2 +=  (total_mean_count / total_p);
 				maximization_norm(1.0/total_p, (int)__det_x, (int)__det_y, BlockSize);
-				merge_slice(quat_tmp, NULL, BlockSize, (int)__det_x, (int)__det_y);
+				merge_slice(i, NULL, BlockSize, (int)__det_x, (int)__det_y);
 			}
 
 		}
@@ -282,6 +279,9 @@ int main(int argc, char** argv){
 			fclose(fp);
 			free(rsort);
 		}
+
+		// refresh criterion
+		KL_entropy = 0;
 		
 	}
 
@@ -295,7 +295,7 @@ int main(int argc, char** argv){
 
 
 	time(&program_end);
-	diff_t = difftime(program_start, program_end);
+	diff_t = difftime(program_end, program_start);
 	printf("Total used time : %lf s\n", diff_t);
 
 }

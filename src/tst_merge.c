@@ -161,7 +161,7 @@ int main(int argc, char** argv){
 
 	// init gpu var
 	gpu_var_init((int)__det_x, (int)__det_y, center, num_mask_ron, (int)__qmax_len, 20, 
-									det, mask, mymodel, model_2, merge_w, 256);
+						num_quat, quater, det, mask, mymodel, model_2, merge_w, 256);
 
 
 	// test performance
@@ -173,19 +173,14 @@ int main(int argc, char** argv){
 	for(i=0; i<num_quat; i++)
 	{
 
-		tmp[0] = quater[i*4];
-		tmp[1] = quater[i*4+1];
-		tmp[2] = quater[i*4+2];
-		tmp[3] = quater[i*4+3];
-
 		// slicing from model_1
-		get_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1], 1);
+		get_slice(i, myslice, BlockSize, pat_s[0], pat_s[1], 1);
 
 		// do somthing
 		// ...
 
 		// merge to model_2	
-		merge_slice(tmp, NULL, BlockSize, pat_s[0], pat_s[1]);
+		merge_slice(i, NULL, BlockSize, pat_s[0], pat_s[1]);
 
 	}
 
@@ -198,14 +193,12 @@ int main(int argc, char** argv){
 
 
 	// slicing examples
-	tmp[0] = quater[0]; tmp[1] = quater[1]; tmp[2] = quater[2]; tmp[3] = quater[3];
-	get_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1], 1);
+	get_slice(0, myslice, BlockSize, pat_s[0], pat_s[1], 1);
 	fp = fopen("./output/tst_slicing_1.bin", "wb");
 	fwrite(myslice, sizeof(float), pat_s[0]*pat_s[1], fp);
 	fclose(fp);
 
-	tmp[0] = quater[40]; tmp[1] = quater[41]; tmp[2] = quater[42]; tmp[3] = quater[43];
-	get_slice(tmp, myslice, BlockSize, pat_s[0], pat_s[1], 1);
+	get_slice(10, myslice, BlockSize, pat_s[0], pat_s[1], 1);
 	fp = fopen("./output/tst_slicing_2.bin", "wb");
 	fwrite(myslice, sizeof(float), pat_s[0]*pat_s[1], fp);
 	fclose(fp);

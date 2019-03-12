@@ -22,7 +22,7 @@ uint32 __ang_corr_grid;
 float __center_q[3];
 float *__model_1, *__model_2, *__merge_w;
 float *__det;
-float *__quat; 
+float *__quat;
 emac_pat* __dataset;
 int* __mask;
 float *__P_jk;

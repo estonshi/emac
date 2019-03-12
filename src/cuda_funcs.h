@@ -6,8 +6,9 @@
 
 extern void setDevice(int gpu_id);
 
-extern void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
-	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
+extern void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], 
+	int vol_size, int stoprad, int quat_num, float *quaternion, float *ori_det, 
+	int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
 extern void upload_models_to_gpu(float *model_1, float *model_2, int vol_size);
 
@@ -28,9 +29,9 @@ extern float cuda_return_time();
 
 /*   slicing and merging   */
 
-extern void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
+extern void get_slice(int quat_index, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
 
-extern void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
+extern void merge_slice(int quat_index, float *myslice, int BlockSize, int det_x, int det_y);
 
 extern void merge_scaling(int GridSize, int BlockSize, float scal_factor); 
 

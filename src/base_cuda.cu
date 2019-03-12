@@ -8,8 +8,9 @@
 
 extern "C" void setDevice(int gpu_id);
 
-extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
-	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
+extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], 
+	int vol_size, int stoprad, int quat_num, float *quaternion, float *ori_det, 
+	int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
 extern "C" void upload_models_to_gpu(float *model_1, float *model_2, int vol_size);
 
@@ -29,9 +30,9 @@ extern "C" float cuda_return_time();
 
 /*   slicing and merging   */
 
-extern "C" void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
+extern "C" void get_slice(int quat_index, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX);
 
-extern "C" void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y);
+extern "C" void merge_slice(int quat_index, float *myslice, int BlockSize, int det_x, int det_y);
 
 extern "C" void merge_scaling(int GridSize, int BlockSize, float scal_factor);
 
@@ -71,8 +72,9 @@ void setDevice(int gpu_id)
 
 
 
-void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], int vol_size, int stoprad, 
-	float *ori_det, int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins)
+void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2], 
+	int vol_size, int stoprad, int quat_num, float *quaternion, float *ori_det, 
+	int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins)
 {
 
 	// constant
@@ -97,6 +99,12 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2]
 	cudaMalloc((void**)&__mask_gpu, pat_s[0]*pat_s[1]*sizeof(int));
 	cudaMemcpy(__mask_gpu, ori_mask, pat_s[0]*pat_s[1]*sizeof(int), cudaMemcpyHostToDevice);
 	cudaBindTexture(NULL, __tex_mask, __mask_gpu, pat_s[0]*pat_s[1]*sizeof(int));
+
+
+	// quaternion
+	cudaMalloc((void**)&__quaternion, quat_num*sizeof(float)*4);
+	cudaMemcpy(__quaternion, quaternion, quat_num*sizeof(float)*4, cudaMemcpyHostToDevice);
+	cudaBindTexture(NULL, __tex_quat, __quaternion, quat_num*sizeof(float)*4);
 
 
 	// model_1 & merge_w & model_2
@@ -125,22 +133,33 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2]
 
 
 	// host allocated mapped array
+	// store slices
 	int size_tmp = ((det_x*det_y+__ThreadPerBlock-1)/__ThreadPerBlock);
 	cudaHostAlloc( (void**)&__mapped_array_host, 
 					size_tmp*sizeof(float), 
 					cudaHostAllocWriteCombined | cudaHostAllocMapped);
 	cudaErrchk(cudaHostGetDevicePointer(&__mapped_array_device, __mapped_array_host, 0));
 
-	size_tmp = ((ang_corr_bins*ang_corr_bins+__ThreadPerBlock-1)/__ThreadPerBlock);
-	cudaHostAlloc( (void**)&__mapped_array_host_2, 
-					size_tmp*sizeof(float), 
-					cudaHostAllocWriteCombined | cudaHostAllocMapped);
-	cudaErrchk(cudaHostGetDevicePointer(&__mapped_array_device_2, __mapped_array_host_2, 0));
+	// judge : open ac acceleration ?
+	if(ang_corr_bins > 0){
+		// store angular correlation map
+		size_tmp = ((ang_corr_bins*ang_corr_bins+__ThreadPerBlock-1)/__ThreadPerBlock);
+		cudaHostAlloc( (void**)&__mapped_array_host_2, 
+						size_tmp*sizeof(float), 
+						cudaHostAllocWriteCombined | cudaHostAllocMapped);
+		cudaErrchk(cudaHostGetDevicePointer(&__mapped_array_device_2, __mapped_array_host_2, 0));
 
+		// angular correlation device buffer
+		cudaErrchk(cudaMalloc((void**)&__slice_AC_device, ang_corr_bins*ang_corr_bins*sizeof(float)));
+		cudaErrchk(cudaMalloc((void**)&__pattern_AC_device, ang_corr_bins*ang_corr_bins*sizeof(float)));
+	}
+	else{
+		__mapped_array_host_2 = NULL;
+		__mapped_array_device_2 = NULL;
+		__slice_AC_device = NULL;
+		__pattern_AC_device = NULL;
+	}
 
-	// angular correlation device buffer
-	cudaErrchk(cudaMalloc((void**)&__slice_AC_device, ang_corr_bins*ang_corr_bins*sizeof(float)));
-	cudaErrchk(cudaMalloc((void**)&__pattern_AC_device, ang_corr_bins*ang_corr_bins*sizeof(float)));
 
 
 	// Events
@@ -224,6 +243,10 @@ void free_cuda_all()
 	cudaUnbindTexture(__tex_mask);
 	cudaFree(__det_gpu);
 
+	// free quaternion
+	cudaUnbindTexture(__tex_quat);
+	cudaFree(__quaternion);
+
 	// free model_1
 	cudaUnbindTexture(__tex_model);
 	cudaFreeArray(__model_1_gpu);
@@ -240,10 +263,14 @@ void free_cuda_all()
 
 	// free host allocated mapped memory
 	cudaFreeHost(__mapped_array_host);
+	if(__mapped_array_host_2 != NULL)
+		cudaFreeHost(__mapped_array_host_2);
 
 	// free __angcorr_device
-	cudaFree(__slice_AC_device);
-	cudaFree(__pattern_AC_device);
+	if(__slice_AC_device != NULL)
+		cudaFree(__slice_AC_device);
+	if(__pattern_AC_device != NULL)
+		cudaFree(__pattern_AC_device);
 
 	// destroy cuda event
 	cudaEventDestroy(__custart);
@@ -314,11 +341,39 @@ void get_rotate_matrix(float *quater, float rotm[9]){
 }
 
 
-__global__ void slicing(float *ori_det, float *myslice, int *mymask, int MASKPIX){
+__device__ void get_rot_mat(int quat_index, float rotm[9]){
+	// return rotm[9] ~ index=[00,01,02,10,11,12,20,21,22]
+
+	float q0, q1, q2, q3;
+
+	q0 = tex1Dfetch(__tex_quat, quat_index*4 + 0);
+	q1 = tex1Dfetch(__tex_quat, quat_index*4 + 1);
+	q2 = tex1Dfetch(__tex_quat, quat_index*4 + 2);
+	q3 = tex1Dfetch(__tex_quat, quat_index*4 + 3);
+
+	rotm[0] = (1. - 2.*(q2*q2 + q3*q3));
+	rotm[1] = 2.*(q1*q2 + q0*q3);
+	rotm[2] = 2.*(q1*q3 - q0*q2);
+	rotm[3] = 2.*(q1*q2 - q0*q3);
+	rotm[4] = (1. - 2.*(q1*q1 + q3*q3));
+	rotm[5] = 2.*(q0*q1 + q2*q3);
+	rotm[6] = 2.*(q0*q2 + q1*q3);
+	rotm[7] = 2.*(q2*q3 - q0*q1);
+	rotm[8] = (1. - 2.*(q1*q1 + q2*q2));
+
+	return;
+}
+
+
+__global__ void slicing(float *ori_det, float *myslice, int *mymask, int quat_index, int MASKPIX){
 
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 	int offset = x + y * blockDim.x * gridDim.x;
+
+	// get rotation matrix
+	float rotm_cache[9];
+	get_rot_mat(quat_index, rotm_cache);
 
 	float q0, q1, q2;
 	float d[3];
@@ -335,9 +390,9 @@ __global__ void slicing(float *ori_det, float *myslice, int *mymask, int MASKPIX
 	q0 = ori_det[offset*3];
 	q1 = ori_det[offset*3+1];
 	q2 = ori_det[offset*3+3];
-	d[0] = __rotm_gpu[0] * q0 + __rotm_gpu[1] * q1 + __rotm_gpu[2] * q2;
-	d[1] = __rotm_gpu[3] * q0 + __rotm_gpu[4] * q1 + __rotm_gpu[5] * q2;
-	d[2] = __rotm_gpu[6] * q0 + __rotm_gpu[7] * q1 + __rotm_gpu[8] * q2;
+	d[0] = rotm_cache[0] * q0 + rotm_cache[1] * q1 + rotm_cache[2] * q2;
+	d[1] = rotm_cache[3] * q0 + rotm_cache[4] * q1 + rotm_cache[5] * q2;
+	d[2] = rotm_cache[6] * q0 + rotm_cache[7] * q1 + rotm_cache[8] * q2;
 
 	// interp
 	int lx, ly, lz, center;
@@ -446,22 +501,17 @@ __global__ void slicing(float *ori_det, float *myslice, int *mymask, int MASKPIX
 
 
 
-void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX)
+void get_slice(int quat_index, float *myslice, int BlockSize, int det_x, int det_y, int MASKPIX)
 {
 
 	gpuInitchk();
-
-	// rotation matrix
-	float rotm[9];
-	get_rotate_matrix(quaternion, rotm);
-	cudaErrchk(cudaMemcpyToSymbol(__rotm_gpu, rotm, sizeof(float)*9));
 
 	// dim
 	dim3 threads( BlockSize, BlockSize );
 	dim3 blocks( (det_x+BlockSize-1)/BlockSize, (det_y+BlockSize-1)/BlockSize );
 
 	// slicing
-	slicing<<<blocks, threads>>>(__det_gpu, __myslice_device, __mask_gpu, MASKPIX);
+	slicing<<<blocks, threads>>>(__det_gpu, __myslice_device, __mask_gpu, quat_index, MASKPIX);
 
 	// copy back
 	if (myslice != NULL)
@@ -475,7 +525,7 @@ void get_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int 
 // I didn't try that cuz its really complex to arrange such a large volume array
 // ...
 // ok ... cuz I'm lazy ...
-__global__ void merging(float *ori_det, float *myslice, int *mymask, float *new_model, float *merge_w)
+__global__ void merging(float *ori_det, float *myslice, int *mymask, float *new_model, float *merge_w, int quat_index)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -492,13 +542,17 @@ __global__ void merging(float *ori_det, float *myslice, int *mymask, float *new_
 		return;
 	}
 
+	// quaternion
+	float rotm_cache[9];
+	get_rot_mat(quat_index, rotm_cache);
+
 	// calculate rotated det coordinate
 	q0 = ori_det[offset*3];
 	q1 = ori_det[offset*3+1];
 	q2 = ori_det[offset*3+3];
-	d[0] = __rotm_gpu[0] * q0 + __rotm_gpu[1] * q1 + __rotm_gpu[2] * q2;
-	d[1] = __rotm_gpu[3] * q0 + __rotm_gpu[4] * q1 + __rotm_gpu[5] * q2;
-	d[2] = __rotm_gpu[6] * q0 + __rotm_gpu[7] * q1 + __rotm_gpu[8] * q2;
+	d[0] = rotm_cache[0] * q0 + rotm_cache[1] * q1 + rotm_cache[2] * q2;
+	d[1] = rotm_cache[3] * q0 + rotm_cache[4] * q1 + rotm_cache[5] * q2;
+	d[2] = rotm_cache[6] * q0 + rotm_cache[7] * q1 + rotm_cache[8] * q2;
 
 	center = (__vol_len_gpu[0]-1)/2;
 	d[0] = d[0] + center;
@@ -624,7 +678,7 @@ __global__ void merging_sc(float *new_model, float *merge_w, float scal_factor)
 
 
 
-void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, int det_y)
+void merge_slice(int quat_index, float *myslice, int BlockSize, int det_x, int det_y)
 {
 
 	gpuInitchk();
@@ -632,17 +686,12 @@ void merge_slice(float *quaternion, float *myslice, int BlockSize, int det_x, in
 	if (myslice != NULL)
 		cudaErrchk(cudaMemcpy(__myslice_device, myslice, det_x*det_y*sizeof(float), cudaMemcpyHostToDevice));
 
-	// rotation matrix
-	float rotm[9];
-	get_rotate_matrix(quaternion, rotm);
-	cudaErrchk(cudaMemcpyToSymbol(__rotm_gpu, rotm, sizeof(float)*9));
-
 	// dim
 	dim3 threads( BlockSize, BlockSize );
 	dim3 blocks( (det_x+BlockSize-1)/BlockSize, (det_y+BlockSize-1)/BlockSize );
 
 	// merging
-	merging<<<blocks, threads>>>(__det_gpu, __myslice_device, __mask_gpu, __model_2_gpu, __w_gpu);
+	merging<<<blocks, threads>>>(__det_gpu, __myslice_device, __mask_gpu, __model_2_gpu, __w_gpu, quat_index);
 
 
 }
