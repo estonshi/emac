@@ -3,6 +3,10 @@
 cuda_include=$CUDA_HOME/include
 cuda_lib=$CUDA_HOME/lib64
 
+# mkdir
+if [ ! -d "./bin" ];then
+	mkdir ./bin
+fi
 
 ## compile python files
 
