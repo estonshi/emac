@@ -1014,19 +1014,20 @@ __global__ void possion_likelihood(float beta, float *reduced_array)
 	x = tex1Dfetch(__tex_mask, global_offset);
 	if(global_offset >= __pats_gpu[0]*__pats_gpu[1] || x > 0){
 		cache[shared_offset] = 0;
-		return;
-	}
-
-	float k, w, s;
-	w = tex1Dfetch(__tex_01, global_offset);
-	k = tex1Dfetch(__tex_02, global_offset);
-
-	if(w<=0){
-		cache[shared_offset] = 0;
 	}
 	else{
-		s = beta/(__pats_gpu[0]*__pats_gpu[1] - (__num_mask_ron_gpu[0]+__num_mask_ron_gpu[1]));
-		cache[shared_offset] = (k*__logf(w)-w)*s;
+		float k, w, s;
+		w = tex1Dfetch(__tex_01, global_offset);
+		k = tex1Dfetch(__tex_02, global_offset);
+
+		if(w<=0){
+			cache[shared_offset] = 0;
+		}
+		else{
+			s = (k*__logf(w)-w)*beta;
+			s = s/(__pats_gpu[0]*__pats_gpu[1] - (__num_mask_ron_gpu[0]+__num_mask_ron_gpu[1]));
+			cache[shared_offset] = s;
+		}
 	}
 
 	__syncthreads();
@@ -1069,12 +1070,12 @@ float calc_likelihood(float beta, float *model_slice, float *pattern, int det_x,
 	cudaErrchk(cudaThreadSynchronize());
 
 	// reduce
-	float c = 0;
+	double c = 0;
 	int i;
 	for(i=0; i<array_length; i++){
 		c += __mapped_array_host[i];
 	}
-	c = expf(c);
+	c = exp(c);
 
 	// unbind texture
 	cudaUnbindTexture(__tex_01);

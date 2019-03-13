@@ -1,2 +1,4 @@
 *.bk
 *.pyc
+*.directory
+emac.*

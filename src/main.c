@@ -13,7 +13,8 @@ int main(int argc, char** argv){
 	resume = false;
 	gpu_id = 0;
 	BlockSize = 16;
-	num_threads = omp_get_max_threads();
+	//num_threads = omp_get_max_threads();
+	num_threads = 1;
 	while( (c = getopt(argc, argv, "c:i:g:b:t:rh")) != -1 ){
 		switch (c){
 			case 'c':
@@ -47,7 +48,7 @@ int main(int argc, char** argv){
 				printf("\n        -i [iteration]   : number of iterations");
 				printf("\n        -g [gpu id]      : which GPU to use, default = 0");
 				printf("\n        -b [Block Size]  : 2D block size used in GPU calculation, default = 16");
-				printf("\n        -t [num_threads] : number of parallel threads, default = NUM_CPU_CORES");
+				printf("\n        -t [num_threads] : number of parallel threads, default = 1");
 				printf("\n        -r               : if given, then resume from last iteration");
 				printf("\n");
 				return 0;
@@ -100,6 +101,7 @@ int main(int argc, char** argv){
 		time(&loop_start);
 		thisp = __dataset;
 		printf(">>> Start iteration %u / %u\n", __iter_now, __iter_all);
+		printf("\t* beta = %f\n", __beta);
 
 
 		/*   likelihood   */
@@ -125,6 +127,11 @@ int main(int argc, char** argv){
 
 			}
 
+			if(total_p < 1e-9){
+				printf("[Error] likelihood is too small, give smaller beta value ! Terminated.\n");
+				exit(-1);
+			}
+
 			#pragma omp parallel for schedule(static,1) reduction(+:KL_entropy) private(prob_tmp)
 			for(i=0; i<__quat_num; i++){
 				prob_tmp =  __P_jk[i + j*__quat_num] / total_p;
@@ -134,7 +141,8 @@ int main(int argc, char** argv){
 			#pragma omp barrier
 
 			thisp = thisp->next;
-			printf("iter : %d \n", j);
+			if(j % (int)(__num_data/3.0) == 0)
+				printf("\t  progress: %.1f % \n", (float)j/__num_data*100);
 
 		}
 
@@ -171,6 +179,10 @@ int main(int argc, char** argv){
 				maximization_norm(1.0/total_p, (int)__det_x, (int)__det_y, BlockSize);
 				merge_slice(i, NULL, BlockSize, (int)__det_x, (int)__det_y);
 			}
+
+
+			if(i % (int)(__quat_num/3.0) == 0)
+				printf("\t  progress: %.1f % \n", (float)i/__quat_num*100);
 
 		}
 
@@ -254,7 +266,7 @@ int main(int argc, char** argv){
 		fclose(fp);
 
 		// save model
-		sprintf(line, "%s/model/model_%.3u.txt", __output_dir, __iter_now);
+		sprintf(line, "%s/model/model_%.3u.bin", __output_dir, __iter_now);
 		fp = fopen(line, "w");
 		fwrite(__model_1, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);  // __model_1 & __model_2 are exchanged
 		fclose(fp);
