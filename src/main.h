@@ -5,6 +5,7 @@
 #include "params.h"
 #include "cuda_funcs.h" 
 #include <omp.h>
+#include "mpi.h"
 
 
 // local variables
@@ -12,6 +13,7 @@ int BlockSize;
 int num_threads;
 float PROB_MIN;
 float total_p;
+float *scaling_p;       // need to free
 float prob_tmp;
 float mean_count, total_mean_count;
 float rescale_model_2;
@@ -33,6 +35,11 @@ emac_pat *thisp;
 float *pattern;  // need to free
 
 float *tmp_model;
+char *token;
+
+// global variables
+int __MPIRANK, __NUMPROC;
+
 
 // output orientation probabilities
 typedef struct rindex{

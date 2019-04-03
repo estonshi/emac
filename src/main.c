@@ -5,7 +5,11 @@
 int main(int argc, char** argv){
 
 	//
-	time(&program_start);
+	if( __MPIRANK == 0 )
+		time(&program_start);
+	MPI_Init(&argc, &argv);
+	MPI_Comm_rank(MPI_COMM_WORLD, &__MPIRANK);
+	MPI_Comm_size(MPI_COMM_WORLD, &__NUMPROC);
 
 	/*
 	Parse Parameters
@@ -26,11 +30,24 @@ int main(int argc, char** argv){
 					__iter_all = i;
 				else{
 					printf("[ERROR] iterations should be positive integer\n");
+					MPI_Finalize();
 					exit(-1);
 				}
 				break;
 			case 'g':
-				gpu_id = atoi(optarg);
+				//gpu_id = atoi(optarg);
+				token = strtok(optarg,",");
+				i = 0;
+				while(i != __MPIRANK){
+					token = strtok(NULL, ",");
+					i++;
+					if(token == NULL){
+						printf("[ERROR] The number of given GPU(s) is smaller than MPI size.\n");
+						MPI_Finalize();
+						exit(-1);
+					}
+				}
+				gpu_id = atoi(token);
 				break;
 			case 'b':
 				BlockSize = atoi(optarg);
@@ -46,7 +63,7 @@ int main(int argc, char** argv){
 				printf("\nOptions:");
 				printf("\n        -c [config_file] : config file path");
 				printf("\n        -i [iteration]   : number of iterations");
-				printf("\n        -g [gpu id]      : which GPU to use, default = 0");
+				printf("\n        -g [gpu id]      : which GPUs to use, e.g. '0,1,2' ,default is 0");
 				printf("\n        -b [Block Size]  : 2D block size used in GPU calculation, default = 16");
 				printf("\n        -t [num_threads] : number of parallel threads, default = 1");
 				printf("\n        -r               : if given, then resume from last iteration");
@@ -62,7 +79,9 @@ int main(int argc, char** argv){
 	/*
 	Initiation
 	*/
-	printf("System setup ...\n");
+	printf("Submit rank %d to GPU %d\n", __MPIRANK, gpu_id);
+	if( __MPIRANK == 0 )
+		printf("System setup ...\n");
 
 	// openmp
 	omp_set_num_threads(num_threads);
@@ -72,10 +91,15 @@ int main(int argc, char** argv){
 		printf("[ERROR] use [-i] option to provide number of iterations\n");
 		exit(-1);
 	}
-	succeed = setup(config_file, resume);
+	succeed = setup(config_file, resume, __MPIRANK);
 	if(!succeed){
 		free_all();
-		return -1;
+		MPI_Finalize();
+		exit(-1);
+	}
+	// bcast __model_1 if __NUMPROC > 1 and resume == false
+	if(__NUMPROC > 1 && resume == false){
+		MPI_Bcast(__model_1, (int)__qmax_len*__qmax_len*__qmax_len, MPI_FLOAT, 0, MPI_COMM_WORLD);
 	}
 
 	pattern = (float*) calloc((int)__det_x*__det_y, sizeof(float*));
@@ -100,15 +124,21 @@ int main(int argc, char** argv){
 
 		time(&loop_start);
 		thisp = __dataset;
-		printf(">>> Start iteration %u / %u\n", __iter_now, __iter_all);
-		printf("\t* beta = %f\n", __beta);
+		if(__MPIRANK == 0){
+			printf(">>> Start iteration %u / %u\n", __iter_now, __iter_all);
+			printf("\t* beta = %f\n", __beta);
 
 
 		/*   likelihood   */
-		printf("\t* Evaluating likelihood ...\n");
+			printf("\t* Evaluating likelihood ...\n");
+		}
 
 		for(j=0; j<__num_data; j++)
 		{
+
+			// parallel
+			if(j % __NUMPROC != __MPIRANK)
+				continue;
 
 			mean_count = parse_pattern(thisp, __det_x*__det_y, __scale, pattern);
 			// init pattern buffer
@@ -127,8 +157,9 @@ int main(int argc, char** argv){
 
 			}
 
-			if(total_p < 1e-9){
+			if(total_p/__quat_num < 1e-10){
 				printf("[Error] likelihood is too small, give smaller beta value ! Terminated.\n");
+				MPI_Finalize();
 				exit(-1);
 			}
 
@@ -146,14 +177,23 @@ int main(int argc, char** argv){
 
 		}
 
+		// (all) reduce __P_jk
+		MPI_Allreduce(MPI_IN_PLACE, __P_jk, __num_data*__quat_num, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+
+		// refresh thisp pointer
 		thisp = NULL;
 
 		/*  maximization  */
-		printf("\t* Doing maximization ...\n");
+		if( __MPIRANK == 0 )
+			printf("\t* Doing maximization ...\n");
 
 		rescale_model_2 = 0;
 
 		for(i=0; i<__quat_num; i++){
+
+			// parallel
+			if(i % __NUMPROC != __MPIRANK)
+				continue;
 
 			memcpy_device_slice_buf(NULL, (int)__det_x, (int)__det_y);
 			total_p = 0;
@@ -181,24 +221,37 @@ int main(int argc, char** argv){
 			}
 
 
-			if(i % (int)(__quat_num/3.0) == 0)
+			if( i % (int)(__quat_num/3.0) == 0)
 				printf("\t  progress: %.1f % \n", (float)i/__quat_num*100);
 
 		}
 
+		// download __merge_w
+		// all reduce (+) __merge_w and rescale_model_2
+		download_volume_from_gpu(__merge_w, (int)__qmax_len, 0);
+		MPI_Allreduce(MPI_IN_PLACE, __merge_w, (int)__qmax_len*__qmax_len*__qmax_len, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Allreduce(MPI_IN_PLACE, &rescale_model_2, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+		// upload __merge_w
+		upload_models_to_gpu(NULL, NULL, __merge_w, (int)__qmax_len);
+
+
+		// merge scaling
 		rescale_model_2 = __dataset_mean_count / (rescale_model_2 / __quat_num);
 		merge_scaling(BlockSize, BlockSize, 1);
-		thisp = NULL;
-
 		download_model2_from_gpu(__model_2, (int)__qmax_len);
+		// all reduce (+) __model_2
+		MPI_Allreduce(MPI_IN_PLACE, __model_2, (int)__qmax_len*__qmax_len*__qmax_len, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 
+
+		thisp = NULL;
 		time(&loop_end);
 		diff_t = difftime(loop_start, loop_end);
 
 
 
 		/* evaulate changes & rescale __model_2 */
-		printf("\t* Result evaulation ...\n");
+		if( __MPIRANK == 0 )
+			printf("\t* Result evaulation ...\n");
 
 		diff_model = 0;
 		model_norm = 0;
@@ -231,18 +284,21 @@ int main(int argc, char** argv){
 
 		diff_model = sqrt(diff_model/model_norm);
 
-		printf("\t\trelative rmsd change : %lf\n", diff_model);
+		if( __MPIRANK == 0 )
+			printf("\t\trelative rmsd change : %lf\n", diff_model);
 
-		if(__scale)
+		if(__scale && __MPIRANK == 0)
 			printf("\t\tscaling factor       : %f\n", rescale_model_2);
 
 		/* evaulate KL divergence of probabilities  */
 		KL_entropy /= __num_data;
 
-		printf("\t\tprobs KL-divergence  : %lf\n", KL_entropy);
+		if( __MPIRANK == 0 )
+			printf("\t\tprobs KL-divergence  : %lf\n", KL_entropy);
 
 		/* exchange __model_1 & __model_2   */
-		upload_models_to_gpu(__model_2, NULL, (int)__qmax_len);
+		upload_models_to_gpu(__model_2, NULL, NULL, (int)__qmax_len);
+		reset_model((int)__qmax_len, 2);
 		tmp_model = __model_1;
 		__model_1 = __model_2;
 		__model_2 = tmp_model;
@@ -254,42 +310,50 @@ int main(int argc, char** argv){
 		if(__iter_now % __beta_jump == 0){
 			__beta *= __beta_mul;
 		}
-		write_log(__iter_now, (float)diff_t, (float)diff_model, __beta, __quat_num, KL_entropy);
 
-		// save info
-		sprintf(line, "%s/info/info_%.3u.txt", __output_dir, __iter_now);
-		fp = fopen(line, "w");
-		if(__scale)
-			fprintf(fp, "%f, %lf\n", rescale_model_2, KL_entropy);
-		else
-			fprintf(fp, "1.0, %lf\n", KL_entropy);
-		fclose(fp);
+		if( __MPIRANK == 0 ){
+			// write log
+			write_log(__iter_now, (float)diff_t, (float)diff_model, __beta, __quat_num, KL_entropy);
 
-		// save model
-		sprintf(line, "%s/model/model_%.3u.bin", __output_dir, __iter_now);
-		fp = fopen(line, "w");
-		fwrite(__model_1, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);  // __model_1 & __model_2 are exchanged
-		fclose(fp);
-
-		// save probabilities
-		if(__iter_now % 5 == 0 || __iter_now == __iter_all || __iter_now == 1){
-			rdata *rsort = (rdata*)malloc(__quat_num * sizeof(rdata));
-			rdata buffer;
-			sprintf(line, "%s/probs/probs_%.3u.txt", __output_dir, __iter_now);
+			// save info
+			sprintf(line, "%s/info/info_%.3u.txt", __output_dir, __iter_now);
 			fp = fopen(line, "w");
-			for(j=0; j<__num_data; j++){
-				for(i=0; i<__quat_num; i++){
-					rsort[i].data = __P_jk[i + j*__quat_num];
-					rsort[i].index = i;
-				}
-				qsort(rsort, __quat_num, sizeof(rsort[0]), cmp);
-				for(i=0; i<10; i++){
-					buffer = rsort[i];
-					fprintf(fp, "%f,%d\n", buffer.data, buffer.index);
-				}
-			}
+			if(__scale)
+				fprintf(fp, "%f, %lf\n", rescale_model_2, KL_entropy);
+			else
+				fprintf(fp, "1.0, %lf\n", KL_entropy);
 			fclose(fp);
-			free(rsort);
+
+			// save model
+			sprintf(line, "%s/model/model_%.3u.bin", __output_dir, __iter_now);
+			fp = fopen(line, "w");
+			fwrite(__model_1, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);  // __model_1 & __model_2 are exchanged
+			fclose(fp);
+
+			// save probabilities
+			sprintf(line, "%s/probs/probs_%.3u.bin", __output_dir, __iter_now);
+			fp = fopen(line, "w");
+			fwrite(__P_jk, sizeof(float), __quat_num*__num_data, fp);
+			fclose(fp);
+			if(__iter_now % 5 == 0 || __iter_now == __iter_all || __iter_now == 1){
+				rdata *rsort = (rdata*)malloc(__quat_num * sizeof(rdata));
+				rdata buffer;
+				sprintf(line, "%s/probs/probs_%.3u_top10.txt", __output_dir, __iter_now);
+				fp = fopen(line, "w");
+				for(j=0; j<__num_data; j++){
+					for(i=0; i<__quat_num; i++){
+						rsort[i].data = __P_jk[i + j*__quat_num];
+						rsort[i].index = i;
+					}
+					qsort(rsort, __quat_num, sizeof(rsort[0]), cmp);
+					for(i=0; i<10; i++){
+						buffer = rsort[i];
+						fprintf(fp, "%f,%d\n", buffer.data, buffer.index);
+					}
+				}
+				fclose(fp);
+				free(rsort);
+			}
 		}
 
 		// refresh criterion
@@ -305,9 +369,11 @@ int main(int argc, char** argv){
 	free_cuda_all();
 	free_all();
 
+	if( __MPIRANK == 0 ){
+		time(&program_end);
+		diff_t = difftime(program_end, program_start);
+		printf("Total used time : %lf s\n", diff_t);
+	}
 
-	time(&program_end);
-	diff_t = difftime(program_end, program_start);
-	printf("Total used time : %lf s\n", diff_t);
-
+	MPI_Finalize();
 }

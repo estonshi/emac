@@ -12,11 +12,15 @@ extern "C" void gpu_var_init(int det_x, int det_y, float det_center[2], int num_
 	int vol_size, int stoprad, int quat_num, float *quaternion, float *ori_det, 
 	int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
-extern "C" void upload_models_to_gpu(float *model_1, float *model_2, int vol_size);
+extern "C" void upload_models_to_gpu(float *model_1, float *model_2, float *merge_w, int vol_size);
 
 extern "C" void download_model2_from_gpu(float *model_2, int vol_size);
 
+extern "C" void download_volume_from_gpu(float *vol_container, int vol_size, int which);
+
 extern "C" void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y);
+
+extern "C" void reset_model(int vol_size, int which);
 
 extern "C" void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y);
 
@@ -174,29 +178,33 @@ void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask_ron[2]
 }
 
 
-void upload_models_to_gpu(float *model_1, float *model_2, int vol_size)
+void upload_models_to_gpu(float *model_1, float *model_2, float *merge_w, int vol_size)
 {
 	// model 1
-	cudaUnbindTexture(__tex_model);
-	cudaExtent volExt = make_cudaExtent(vol_size, vol_size, vol_size);
+	if(model_1 != NULL){
+		cudaUnbindTexture(__tex_model);
+		cudaExtent volExt = make_cudaExtent(vol_size, vol_size, vol_size);
 
-	cudaMemcpy3DParms volParms = {0};
-	volParms.srcPtr = make_cudaPitchedPtr((void*)model_1, sizeof(float)*vol_size, (int)vol_size, (int)vol_size);
-	volParms.dstArray = __model_1_gpu;
-	volParms.extent = volExt;
-	volParms.kind = cudaMemcpyHostToDevice;
+		cudaMemcpy3DParms volParms = {0};
+		volParms.srcPtr = make_cudaPitchedPtr((void*)model_1, sizeof(float)*vol_size, (int)vol_size, (int)vol_size);
+		volParms.dstArray = __model_1_gpu;
+		volParms.extent = volExt;
+		volParms.kind = cudaMemcpyHostToDevice;
 
-	cudaErrchk(cudaMemcpy3D(&volParms));
-	cudaErrchk(cudaBindTextureToArray(__tex_model, __model_1_gpu));
-
+		cudaErrchk(cudaMemcpy3D(&volParms));
+		cudaErrchk(cudaBindTextureToArray(__tex_model, __model_1_gpu));
+	}
 
 	// model 2
 	if(model_2 != NULL){
 		cudaErrchk(cudaMemcpy(__model_2_gpu, model_2, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice));
 	}
-	else{
-		cudaErrchk(cudaMemset(__model_2_gpu, 0, vol_size*vol_size*vol_size*sizeof(float)));
+
+	// merge_w
+	if(merge_w != NULL){
+		cudaErrchk(cudaMemcpy(__w_gpu, merge_w, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyHostToDevice));
 	}
+
 }
 
 
@@ -207,9 +215,42 @@ void download_model2_from_gpu(float *new_model_2, int vol_size)
 }
 
 
+void download_volume_from_gpu(float *vol_container, int vol_size, int which)
+{
+	if(which == 0){
+		cudaErrchk(cudaMemcpy(vol_container, __w_gpu, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyDeviceToHost));
+	}
+	else if(which == 1){
+		cudaErrchk(cudaMemcpy(vol_container, __model_1_gpu, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyDeviceToHost));
+	}
+	else if(which == 2){
+		cudaErrchk(cudaMemcpy(vol_container, __model_2_gpu, vol_size*vol_size*vol_size*sizeof(float), cudaMemcpyDeviceToHost));
+	}
+	else{
+		vol_container = NULL;
+	}
+}
+
+
 void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y)
 {
 	cudaErrchk(cudaMemcpy(new_slice, __myslice_device, det_x*det_y*sizeof(float), cudaMemcpyDeviceToHost));
+}
+
+
+void reset_model(int vol_size, int which){
+	if(which == 0){
+		cudaErrchk(cudaMemset(__w_gpu, 1, vol_size*vol_size*vol_size*sizeof(float)));
+	}
+	else if(which == 1){
+		cudaErrchk(cudaMemset(__model_1_gpu, 0, vol_size*vol_size*vol_size*sizeof(float)));
+	}
+	else if(which == 2){
+		cudaErrchk(cudaMemset(__model_2_gpu, 0, vol_size*vol_size*vol_size*sizeof(float)));
+	}
+	else{
+		;
+	}
 }
 
 

@@ -26,7 +26,7 @@ int main(int argc, char** argv){
 		}
 	}
 
-	bool succeed = setup(config_file, resume);
+	bool succeed = setup(config_file, resume, 0);
 	if(!succeed){
 		free_all();
 		return -1;

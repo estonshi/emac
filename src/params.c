@@ -44,7 +44,7 @@ bool load_det_info(char* det_file, int* mask, float* det){
 void write_log(uint32 iter_num, float used_time, float rms_change, float beta, uint32 num_rot, float KL_entropy){
 	FILE* fp;
 	fp = fopen(__log_file, "a");
-	fprintf(fp, "%-10u %-12.2f %-12.3e %-12.3e %-12u %-10.3f\n", iter_num, used_time, rms_change, KL_entropy, num_rot, beta);
+	fprintf(fp, "%-10u %-12.2f %-12.3e %-12.3e %-12u %-10.5f\n", iter_num, used_time, rms_change, KL_entropy, num_rot, beta);
 	fclose(fp);
 }
 
@@ -121,7 +121,7 @@ bool load_model(char* model_file, uint32 size, float* model){
 }
 
 
-bool setup(char* config_file, bool resume){
+bool setup(char* config_file, bool resume, int mpi_rank){
 
 	int i;
 	// read config file
@@ -226,11 +226,13 @@ bool setup(char* config_file, bool resume){
 
 	fclose(fp);
 
-	if( !resume )
-		printf("[Initial]\n");
-	else
-		printf("[Resuming]\n");
-	printf("Number of rotations is        : %u\n", __quat_num);
+	if( mpi_rank == 0 ){
+		if( !resume )
+			printf("[Initial]\n");
+		else
+			printf("[Resuming]\n");
+		printf("Number of rotations is        : %u\n", __quat_num);
+	}
 
 	// load data, func from emac_data.h
 	uint32 size_x, size_y;
@@ -246,13 +248,15 @@ bool setup(char* config_file, bool resume){
 	__dataset_mean_count = load_emac_dataset(__data_path, __dataset);
 	if( __dataset_mean_count == -1 ) return false;
 
-	printf("Number of patterns is         : %u\n", __num_data);
-	printf("Dataset mean photon count is  : %f\n", __dataset_mean_count);
-	printf("Need scaling                  : %s\n", __scale ? "true" : "false");
+	if( mpi_rank == 0 ){
+		printf("Number of patterns is         : %u\n", __num_data);
+		printf("Dataset mean photon count is  : %f\n", __dataset_mean_count);
+		printf("Need scaling                  : %s\n", __scale ? "true" : "false");
+	}
 
 	// generate quaternion, func from gen_quat.h
 	__quat = (float*) malloc(__quat_num * 4 * sizeof(float));
-	gen_quaternions(quat_lev, 0, __quat);
+	gen_quaternions(quat_lev, 0, __quat);   // mode must be 0, as mode 1 uses random number and cannot be paralleled
 
 	// load detector pixels' qinfo, func from params.h
 	__mask = (int*) malloc(__det_x * __det_y * sizeof(int));
@@ -260,7 +264,9 @@ bool setup(char* config_file, bool resume){
 	if( !load_det_info(__det_path, __mask, __det) ) 
 		return false;
 
-	printf("Merged volume size is         : %u x %u x %u\n", __qmax_len, __qmax_len, __qmax_len);
+	if( mpi_rank == 0 ){
+		printf("Merged volume size is         : %u x %u x %u\n", __qmax_len, __qmax_len, __qmax_len);
+	}
 
 	// initiate model_1, model_2 and merge_w
 	__model_1 = (float*) malloc(__qmax_len*__qmax_len*__qmax_len*sizeof(float));
@@ -270,12 +276,14 @@ bool setup(char* config_file, bool resume){
 	if( !resume ){
 
 		if(init_model[0] != '\0'){
-			printf("Using initial model           : %s\n", init_model);
+			if( mpi_rank == 0 )
+				printf("Using initial model           : %s\n", init_model);
 			if( !load_model(init_model, __qmax_len*__qmax_len*__qmax_len, __model_1) )
 				return false;
 		}
 		else{
-			printf("Using random initial model\n");
+			if( mpi_rank == 0 )
+				printf("Using random initial model\n");
 			srand(time(NULL));
 			for(i=0; i<__qmax_len*__qmax_len*__qmax_len; i++){
 				__model_1[i] = (float) rand() / RAND_MAX * 2 * __dataset_mean_count;
@@ -285,8 +293,8 @@ bool setup(char* config_file, bool resume){
 
 	}
 
-	// initiate __P_jk
-	__P_jk = (float*) malloc(__num_data*__quat_num*sizeof(float));
+	// initiate __P_jk, uses calloc for reduction(+) after parallization
+	__P_jk = (float*) calloc(__num_data*__quat_num, sizeof(float));
 
 
 	if( !resume ){
@@ -294,69 +302,75 @@ bool setup(char* config_file, bool resume){
 		// initiate iter 
 		__iter_now = 1;
 
-		// mkdir
-		sprintf(line, "%s/info", __output_dir);
-		mkdir(line, 0750);
-		sprintf(line, "%s/probs", __output_dir);
-		mkdir(line, 0750);
-		sprintf(line, "%s/model", __output_dir);
-		mkdir(line, 0750);
+		if( mpi_rank == 0 ){
 
-		// write initial information
-		// write scaling
-		sprintf(line, "%s/info/scaling_init.txt", __output_dir);
-		if(__scale){
-			fp = fopen(line, "w");
-			emac_pat* thisp = __dataset;
-			for(i=0; i<__num_data; i++){
-				fprintf(fp, "%.4f\n", thisp->scale_factor);
-				thisp = thisp->next;
+			// mkdir
+			sprintf(line, "%s/info", __output_dir);
+			mkdir(line, 0750);
+			sprintf(line, "%s/probs", __output_dir);
+			mkdir(line, 0750);
+			sprintf(line, "%s/model", __output_dir);
+			mkdir(line, 0750);
+
+			// write initial information
+			// write scaling
+			sprintf(line, "%s/info/scaling_init.txt", __output_dir);
+			if(__scale){
+				fp = fopen(line, "w");
+				emac_pat* thisp = __dataset;
+				for(i=0; i<__num_data; i++){
+					fprintf(fp, "%.4f\n", thisp->scale_factor);
+					thisp = thisp->next;
+				}
+				fclose(fp);
 			}
+			// write model
+			sprintf(line, "%s/model/model_000.bin", __output_dir);
+			fp = fopen(line, "wb");
+			fwrite(__model_1, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);
 			fclose(fp);
+			// write log
+			sprintf(__log_file, "%s/log.txt", __output_dir);
+			fp = fopen(__log_file, "w");
+			fprintf(fp, "[Initiate]\n");
+			fprintf(fp, "Number of rotations   :   %u\n", __quat_num);
+			fprintf(fp, "Number of patterns    :   %u\n", __num_data);
+			fprintf(fp, "Mean photon count     :   %f\n", __dataset_mean_count);
+			if(__scale)
+				fprintf(fp, "Need Scaling          :   yes\n");
+			else
+				fprintf(fp, "Need Scaling          :   no\n");
+			fprintf(fp, "Merged volume size    :   %u x %u x %u\n", __qmax_len, __qmax_len, __qmax_len);
+			if(init_model[0] != '\0')
+				fprintf(fp, "Initial model         :   %s\n", init_model);
+			else
+				fprintf(fp, "Initial model         :   random\n");
+			fprintf(fp, "\n[Iterations]\n");
+			fprintf(fp, "%-10s %-12s %-12s %-12s %-12s %-10s\n", "iter_num", "used_time", "rms_change", "KL_divg", "num_rot", "beta");
+			fclose(fp);
+
+			printf("Log file is                   : %s\n", __log_file);
+
 		}
-		// write model
-		sprintf(line, "%s/model/model_000.bin", __output_dir);
-		fp = fopen(line, "wb");
-		fwrite(__model_1, sizeof(float), __qmax_len*__qmax_len*__qmax_len, fp);
-		fclose(fp);
-		// write log
-		sprintf(__log_file, "%s/log.txt", __output_dir);
-		fp = fopen(__log_file, "w");
-		fprintf(fp, "[Initiate]\n");
-		fprintf(fp, "Number of rotations   :   %u\n", __quat_num);
-		fprintf(fp, "Number of patterns    :   %u\n", __num_data);
-		fprintf(fp, "Mean photon count     :   %f\n", __dataset_mean_count);
-		if(__scale)
-			fprintf(fp, "Need Scaling          :   yes\n");
-		else
-			fprintf(fp, "Need Scaling          :   no\n");
-		fprintf(fp, "Merged volume size    :   %u x %u x %u\n", __qmax_len, __qmax_len, __qmax_len);
-		if(init_model[0] != '\0')
-			fprintf(fp, "Initial model         :   %s\n", init_model);
-		else
-			fprintf(fp, "Initial model         :   random\n");
-		fprintf(fp, "\n[Iterations]\n");
-		fprintf(fp, "%-10s %-12s %-12s %-12s %-12s %-10s\n", "iter_num", "used_time", "rms_change", "KL_divg", "num_rot", "beta");
-		fclose(fp);
-
-		printf("Log file is                   : %s\n", __log_file);
-
 	}
 
 	else{
 
 		// read info from last iteration
-		sprintf(__log_file, "%s/log.txt", __output_dir);
+		if( mpi_rank == 0 )
+			sprintf(__log_file, "%s/log.txt", __output_dir);
 
 		// iter number
 		float temp;
 		temp = read_log("iter_num",-1);
 		if(temp <= 0) return false;
 		else __iter_now = (uint32)(temp+0.1) + 1;
-		printf("Resume from iteration         : %u\n", __iter_now);
+		if( mpi_rank == 0 )
+			printf("Resume from iteration         : %u\n", __iter_now);
 
 		// model
-		sprintf(init_model, "%s/model/model_%.3u.bin", __output_dir, __iter_now - 1);
+		if( mpi_rank == 0 )
+			sprintf(init_model, "%s/model/model_%.3u.bin", __output_dir, __iter_now - 1);
 		if( !load_model(init_model, __qmax_len*__qmax_len*__qmax_len, __model_1) )
 			return false;
 

@@ -34,7 +34,7 @@ void write_log(uint32 iter_num, float used_time, float rms_change, float beta, u
 float read_log(char* read_item, int iter_num);
 
 
-bool setup(char* config_file, bool resume);
+bool setup(char* config_file, bool resume, int mpi_rank);
 void free_all();
 
 #endif

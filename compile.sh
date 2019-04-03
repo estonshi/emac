@@ -32,8 +32,8 @@ gcc -c ./src/gen_quat.c -o ./src/gen_quat.o -lm
 
 gcc -c ./src/params.c -o ./src/params.o -lm
 
-gcc -fopenmp -c ./src/main.c -o ./src/main.o -lm
-
+##gcc -fopenmp -c ./src/main.c -o ./src/main.o -lm
+mpicc -fopenmp -c ./src/main.c -o ./src/main.o -lm -O3
 
 ## compile test C files
 
@@ -64,8 +64,8 @@ gcc ./src/base_cuda.o ./src/tst_ang_corr.o -o ./bin/emac.tst.ang_corr -L $cuda_l
 
 gcc ./src/base_cuda.o ./src/emac_data.o ./src/tst_likelihood.o -o ./bin/emac.tst.maximization -L $cuda_lib -lcudart -lcufft -lcufftw -lm
 
-gcc -fopenmp ./src/base_cuda.o ./src/emac_data.o ./src/gen_quat.o ./src/params.o ./src/main.o -o ./bin/emac.main -L $cuda_lib -lcudart -lcufft -lcufftw -lm
-
+#gcc -fopenmp ./src/base_cuda.o ./src/emac_data.o ./src/gen_quat.o ./src/params.o ./src/main.o -o ./bin/emac.main -L $cuda_lib -lcudart -lcufft -lcufftw -lm
+mpicc -fopenmp ./src/base_cuda.o ./src/emac_data.o ./src/gen_quat.o ./src/params.o ./src/main.o -o ./bin/emac.main -L $cuda_lib -lcudart -lcufft -lcufftw -lm -O3
 
 ## remove .o files
 

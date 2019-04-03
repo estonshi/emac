@@ -10,11 +10,15 @@ extern void gpu_var_init(int det_x, int det_y, float det_center[2], int num_mask
 	int vol_size, int stoprad, int quat_num, float *quaternion, float *ori_det, 
 	int *ori_mask, float *init_model_1, float *init_model_2, float *init_merge_w, int ang_corr_bins);
 
-extern void upload_models_to_gpu(float *model_1, float *model_2, int vol_size);
+extern void upload_models_to_gpu(float *model_1, float *model_2, float *merge_w, int vol_size);
 
 extern void download_model2_from_gpu(float *model_2, int vol_size);
 
+extern void download_volume_from_gpu(float *vol_container, int vol_size, int which);
+
 extern void download_currSlice_from_gpu(float *new_slice, int det_x, int det_y);
+
+extern void reset_model(int vol_size, int which);
 
 extern void memcpy_device_pattern_buf(float *pattern, int det_x, int det_y);
 
