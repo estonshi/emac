@@ -1,0 +1,5 @@
+tst
+*.pyc
+__pycache__
+compile_tst.sh
+bin
